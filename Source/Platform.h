@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <inttypes.h>
 #include <float.h>
+#include <uchar.h>
 
 #if defined(__clang__) || defined(__ibmxl__)
 #define COMPILER_CLANG 1

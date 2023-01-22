@@ -126,15 +126,8 @@ u32 LoadAudioSample(r32 *samples, u32 count, u32 channels, void *user_data) {
 	return count;
 }
 
-bool ApBackend_Failed(HRESULT hr) {
-	if (SUCCEEDED(hr))
-		return false;
-
-	if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
-		return true;
-
+static void PL_FatalError(LPWSTR message) {
 	DWORD error    = GetLastError();
-	LPWSTR message = L"Fatal Backend Error";
 
 	if (error) {
 		FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
@@ -143,280 +136,391 @@ bool ApBackend_Failed(HRESULT hr) {
 	}
 
 	FatalAppExitW(0, message);
-	return true;
 }
 
-typedef enum ApEvent {
-	ApEvent_RequireUpdate,
-	ApEvent_DeviceChanged,
-	ApEvent_DeviceInstalled,
-	ApEvent_Max,
-} ApEvent;
-
-typedef enum ApDeviceKind {
-	ApDeviceKind_Current,
-	ApDeviceKind_Backup,
-	ApDeviceKind_Max
-} ApDeviceKind;
-
-typedef struct ApDevice {
-	IAudioClient *            client;
-	IAudioRenderClient *      render;
-	UINT32                    frames;
-	WAVEFORMATEX *            format;
-	IMMDevice *               handle;
-} ApDevice;
-
-typedef struct ApBackend {
-	IMMNotificationClient     notification;
-	LONG volatile             refcount;
-	HANDLE                    events[ApEvent_Max];
-	ApDevice                  devices[ApDeviceKind_Max];
-	IMMDeviceEnumerator *     enumerator;
-	IMMNotificationClientVtbl vtable;
-} ApBackend;
-
-void ApDevice_Release(ApDevice *device) {
-	if (device->client) IAudioClient_Release(device->client);
-	if (device->render) IAudioRenderClient_Release(device->render);
-	if (device->format) CoTaskMemFree(device->format);
-	if (device->handle) IMMDevice_Release(device->handle);
-	memset(device, 0, sizeof(*device));
-}
-
-bool ApBackend_LoadDevice(ApBackend *backend) {
-	ApDevice_Release(&backend->devices[ApDeviceKind_Backup]);
-
-	IMMDeviceEnumerator *enumerator = backend->enumerator;
-	ApDevice *          device      = &backend->devices[ApDeviceKind_Backup];
-
-	HRESULT hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(enumerator, eRender, eMultimedia, &device->handle);
-	if (hr == E_NOTFOUND) {
-		// no audio output devices available
+static bool PL_Failed(HRESULT hr) {
+	if (SUCCEEDED(hr))
 		return false;
-	}
-	if (ApBackend_Failed(hr)) return false;
-
-	hr = IMMDevice_Activate(device->handle, &IID_IAudioClient, CLSCTX_ALL, nullptr, &device->client);
-	if (ApBackend_Failed(hr)) return false;
-
-	hr = IAudioClient_GetMixFormat(device->client, &device->format);
-	if (ApBackend_Failed(hr)) return false;
-
-	REFERENCE_TIME device_period;
-	hr = IAudioClient_GetDevicePeriod(device->client, nullptr, &device_period);
-	if (ApBackend_Failed(hr)) return false;
-
-	hr = IAudioClient_Initialize(device->client, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-		device_period, device_period, device->format, nullptr);
-	Assert(hr != AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED);
-	if (ApBackend_Failed(hr)) return false;
-
+	PL_FatalError(L"Fatal Internal Error");
 	return true;
 }
 
-void ApBackend_Update(ApBackend *backend) {
-	ApDevice *device = &backend->devices[ApDeviceKind_Current];
-
-	UINT32 padding = 0;
-	HRESULT hr = IAudioClient_GetCurrentPadding(device->client, &padding);
-	if (ApBackend_Failed(hr)) return;
-
-	UINT32 frames = device->frames - padding;
-	BYTE *data    = nullptr;
-	hr = IAudioRenderClient_GetBuffer(device->render, frames, &data);
-	if (ApBackend_Failed(hr)) return;
-
-	u32 written = LoadAudioSample((r32 *)data, frames, device->format->nChannels, nullptr);
-
-	hr = IAudioRenderClient_ReleaseBuffer(device->render, written, 0);
-	if (ApBackend_Failed(hr)) return;
+static bool PL_AudioFailed(HRESULT hr) {
+	if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
+		return true;
+	return PL_Failed(hr);
 }
 
-void ApBackend_Start(ApBackend *backend) {
-	ResetEvent(backend->events[ApEvent_RequireUpdate]);
+enum PL_AudioDeviceFlags {
+	PL_AudioDevice_IsLost   = 0x1,
+	PL_AudioDevice_IsNotPresent = 0x2
+};
 
-	HRESULT hr;
-	ApDevice *device = &backend->devices[ApDeviceKind_Current];
+typedef struct PL_AudioDevice {
+	u32                 flags;
+	u32                 frames;
+	IAudioClient *      client;
+	IAudioRenderClient *render;
+	WAVEFORMATEX *      format;
+	char16_t *          id;
+} PL_AudioDevice;
 
-	if (!device->client) return;
+static IMMDeviceEnumerator *DeviceEnumerator = nullptr;
+static volatile LONG        Initialized      = 0;
+static PL_AudioDevice       Device;
 
-	hr = IAudioClient_SetEventHandle(device->client, backend->events[ApEvent_RequireUpdate]);
-	if (ApBackend_Failed(hr)) return;
-
-	hr = IAudioClient_GetBufferSize(device->client, &device->frames);
-	if (ApBackend_Failed(hr)) return;
-
-	hr = IAudioClient_GetService(device->client, &IID_IAudioRenderClient, &device->render);
-	if (ApBackend_Failed(hr)) return;
-
-	ApBackend_Update(backend);
-
-	hr = IAudioClient_Start(device->client);
-	if (ApBackend_Failed(hr)) return;
-}
-
-HRESULT ApBackend_QueryInterface(IMMNotificationClient *_this, REFIID riid, void **ppvObject) {
-	if (memcmp(&IID_IUnknown, riid, sizeof(IID_IUnknown)) == 0) {
-		*ppvObject = (IUnknown *)_this;
-	} else if (memcmp(&IID_IMMNotificationClient, riid, sizeof(IID_IMMNotificationClient)) == 0) {
-		*ppvObject = (IMMNotificationClient *)_this;
-	} else {
-		*ppvObject = NULL;
-		return E_NOINTERFACE;
-	}
-	return S_OK;
-}
-
-ULONG ApBackend_AddRef(IMMNotificationClient *_this)  { 
-	ApBackend *backend = (ApBackend *)_this; 
-	return InterlockedIncrement(&backend->refcount);
-}
-
-ULONG ApBackend_Release(IMMNotificationClient *_this) { 
-	ApBackend *backend = (ApBackend *)_this; 
-	ULONG res = InterlockedDecrement(&backend->refcount);
-	if (res == 0) {
-		for (int i = 0; i < ApEvent_Max; ++i) {
-			CloseHandle(backend->events[i]);
-		}
-		for (int i = 0; i < ApDeviceKind_Max; ++i) {
-			ApDevice_Release(&backend->devices[i]);
-		}
-		IMMDeviceEnumerator_Release(backend->enumerator);
-		CoTaskMemFree(_this);
-	}
-	return res;
-}
-
-HRESULT ApBackend_OnDeviceStateChanged(IMMNotificationClient *_this, LPCWSTR dev_id, DWORD state) {
-	ApBackend *backend = (ApBackend *)_this;
-	printf("%S changed: %u\n", dev_id, state);
-	return S_OK;
-}
-
-HRESULT ApBackend_OnDeviceAdded(IMMNotificationClient *_this, LPCWSTR dev_id) {
-	printf("%S added\n", dev_id);
-	return S_OK;
-}
-
-HRESULT ApBackend_OnDeviceRemoved(IMMNotificationClient *_this, LPCWSTR dev_id) {
-	printf("%S removed\n", dev_id);
-	return S_OK;
-}
-
-HRESULT ApBackend_OnDefaultDeviceChanged(IMMNotificationClient *_this, EDataFlow flow, ERole role, LPCWSTR dev_id) {
-	const char *flow_str = "";
-	if (flow == eRender) flow_str = "render";
-	else if (flow == eCapture) flow_str = "capture";
-	else if (flow == eAll) flow_str = "all";
-
-	const char *role_str = "";
-	if (role == eConsole) role_str = "console";
-	else if (role == eMultimedia) role_str = "multimedia";
-	else if (role == eCommunications) role_str = "communications";
-
-	printf("%S default changed. Flow: %s, Role: %s\n", dev_id, flow_str, role_str);
-
-	return S_OK;
-}
-
-HRESULT ApBackend_OnPropertyValueChanged(IMMNotificationClient *_this, LPCWSTR dev_id, const PROPERTYKEY key) {
-	return S_OK;
-}
-
-HRESULT ApBackend_Create(ApBackend **out) {
-	ApBackend *backend = CoTaskMemAlloc(sizeof(*backend));
-	if (!backend) {
-		return E_OUTOFMEMORY;
-	}
-
-	memset(backend, 0, sizeof(*backend));
-
-	backend->notification.lpVtbl = &backend->vtable;
-	backend->vtable = (IMMNotificationClientVtbl) {
-		.AddRef                 = ApBackend_AddRef,
-		.Release                = ApBackend_Release,
-		.QueryInterface         = ApBackend_QueryInterface,
-		.OnDeviceStateChanged   = ApBackend_OnDeviceStateChanged,
-		.OnDeviceAdded          = ApBackend_OnDeviceAdded,
-		.OnDeviceRemoved        = ApBackend_OnDeviceRemoved,
-		.OnDefaultDeviceChanged = ApBackend_OnDefaultDeviceChanged,
-		.OnPropertyValueChanged = ApBackend_OnPropertyValueChanged
-	};
-
-	backend->refcount = 1;
-
-	HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, &IID_IMMDeviceEnumerator, &backend->enumerator);
-	if (FAILED(hr)) {
-		CoTaskMemFree(backend);
-		return hr;
-	}
-
-	hr = IMMDeviceEnumerator_RegisterEndpointNotificationCallback(backend->enumerator, &backend->notification);
-	if (FAILED(hr)) {
-		IMMDeviceEnumerator_Release(backend->enumerator);
-		CoTaskMemFree(backend);
-		return hr;
-	}
-
-	for (int i = 0; i < ApEvent_Max; ++i) {
-		backend->events[i] = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-		if (backend->events[i] == INVALID_HANDLE_VALUE) {
-			for (int j = i - 1; j >= 0; ++j)
-				CloseHandle(backend->events[i]);
-			IMMDeviceEnumerator_Release(backend->enumerator);
-			CoTaskMemFree(backend);
-		}
-	}
-
-	if (ApBackend_LoadDevice(backend)) {
-		backend->devices[ApDeviceKind_Current] = backend->devices[ApDeviceKind_Backup];
-		backend->devices[ApDeviceKind_Backup]  = (ApDevice){0};
-		ApBackend_Start(backend);
-	}
-
-	*out = backend;
-
-	return S_OK;
-}
-
-DWORD WINAPI AudioThreadProc(LPVOID param) {
-	HRESULT hr;
-
+static void PL_InitAudioThread(void) {
 	DWORD task_index;
 	AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index);
 
-	hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+	HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 	if (hr != S_OK && hr != S_FALSE && hr != RPC_E_CHANGED_MODE) {
-		FatalAppExitW(0, L"Failed to initialize audio device");
+		FatalAppExitW(0, L"Failed to initialize audio thread");
 	}
 
-	ApBackend *backend = nullptr;
-	hr = ApBackend_Create(&backend);
-	if (FAILED(hr)) {
-		FatalAppExitW(0, L"Failed to initialize audio device");
+	LONG val = InterlockedCompareExchange(&Initialized, 1, 0);
+
+	if (val == 0) {
+		hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, &IID_IMMDeviceEnumerator, &DeviceEnumerator);
+		if (FAILED(hr)) {
+			FatalAppExitW(0, L"Failed to initialize audio thread");
+		}
+	} else {
+		IMMDeviceEnumerator_AddRef(DeviceEnumerator);
 	}
+}
 
-	while (1) {
-		static_assert(ApEvent_RequireUpdate == 0 && ApEvent_DeviceChanged == 1,
-			"RequireUpdate and DeviceChanged are the only events the audio thread needs to wait for");
+static void PL_DeinitAudioThread(void) {
+	if (IMMDeviceEnumerator_Release(DeviceEnumerator) == 0) {
+		InterlockedCompareExchange(&Initialized, 0, 1);
+	}
+	CoUninitialize();
+}
 
-		DWORD event = WaitForMultipleObjects(2, backend->events, FALSE, INFINITE);
+static void PL_CloseAudioDevice(void) {
+	if (Device.client) IAudioClient_Release(Device.client);
+	if (Device.render) IAudioRenderClient_Release(Device.render);
+	if (Device.format) CoTaskMemFree(Device.format);
+	if (Device.id)     CoTaskMemFree(Device.id);
 
-		if (event == WAIT_OBJECT_0 + ApEvent_RequireUpdate) {
-			ApBackend_Update(backend);
-		} else if (event == WAIT_OBJECT_0 + ApEvent_DeviceChanged) {
-			ApDevice backup_device                 = backend->devices[ApDeviceKind_Backup];
-			backend->devices[ApDeviceKind_Backup]  = backend->devices[ApDeviceKind_Current];
-			backend->devices[ApDeviceKind_Current] = backup_device;
-			SetEvent(backend->events[ApEvent_DeviceInstalled]);
-			ApBackend_Start(backend);
+	memset(&Device, 0, sizeof(Device));
+}
+
+static void PL_StartAudioDevice(void) {
+	HRESULT hr = IAudioClient_Start(Device.client);
+	if (PL_AudioFailed(hr)) {
+		Device.flags |= PL_AudioDevice_IsLost;
+	}
+}
+
+static void PL_StopAudioDevice(void) {
+	HRESULT hr = IAudioClient_Stop(Device.client);
+	if (PL_AudioFailed(hr)) {
+		Device.flags |= PL_AudioDevice_IsLost;
+	}
+}
+
+static void PL_ResetAudioDevice(void) {
+	HRESULT hr = IAudioClient_Reset(Device.client);
+	if (PL_AudioFailed(hr)) {
+		Device.flags |= PL_AudioDevice_IsLost;
+	}
+}
+
+static void PL_UpdateAudioDevice(void) {
+	UINT32 padding = 0;
+	HRESULT hr = IAudioClient_GetCurrentPadding(Device.client, &padding);
+	if (PL_AudioFailed(hr)) goto failed;
+
+	UINT32 frames = Device.frames - padding;
+	BYTE *data    = nullptr;
+	hr = IAudioRenderClient_GetBuffer(Device.render, frames, &data);
+	if (PL_AudioFailed(hr)) goto failed;
+
+	u32 written = LoadAudioSample((r32 *)data, frames, Device.format->nChannels, nullptr);
+
+	hr = IAudioRenderClient_ReleaseBuffer(Device.render, written, 0);
+	if (PL_AudioFailed(hr)) goto failed;
+
+	return;
+
+failed:
+	Device.flags |= PL_AudioDevice_IsLost;
+}
+
+static void PL_OpenAudioDevice(char16_t *id, HANDLE event) {
+	HRESULT hr;
+
+	IMMDevice *endpoint = nullptr;
+
+	if (id) {
+		hr = IMMDeviceEnumerator_GetDevice(DeviceEnumerator, id, &endpoint);
+		if (hr != E_NOTFOUND) {
+			if (PL_Failed(hr)) {
+				Device.flags |= PL_AudioDevice_IsLost;
+				return;
+			}
 		}
 	}
 
-	ApBackend_Release(&backend->notification);
-	CoUninitialize();
+	if (!endpoint) {
+		hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(DeviceEnumerator, eRender, eMultimedia, &endpoint);
+		if (hr == E_NOTFOUND) {
+			Device.flags |= PL_AudioDevice_IsNotPresent;
+			return;
+		}
+	}
+
+	if (PL_Failed(hr)) {
+		Device.flags |= PL_AudioDevice_IsNotPresent;
+		return;
+	}
+
+	Device.flags = 0;
+
+	IMMDevice_GetId(endpoint, &Device.id);
+
+	hr = IMMDevice_Activate(endpoint, &IID_IAudioClient, CLSCTX_ALL, nullptr, &Device.client);
+	if (PL_AudioFailed(hr)) goto failed;
+
+	hr = IAudioClient_GetMixFormat(Device.client, &Device.format);
+	if (PL_AudioFailed(hr)) goto failed;
+
+	REFERENCE_TIME device_period;
+	hr = IAudioClient_GetDevicePeriod(Device.client, nullptr, &device_period);
+	if (PL_AudioFailed(hr)) goto failed;
+
+	hr = IAudioClient_Initialize(Device.client, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+		device_period, device_period, Device.format, nullptr);
+	Assert(hr != AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED);
+	if (PL_AudioFailed(hr)) goto failed;
+
+	hr = IAudioClient_SetEventHandle(Device.client, event);
+	if (PL_AudioFailed(hr)) goto failed;
+
+	hr = IAudioClient_GetBufferSize(Device.client, &Device.frames);
+	if (PL_AudioFailed(hr)) goto failed;
+
+	hr = IAudioClient_GetService(Device.client, &IID_IAudioRenderClient, &Device.render);
+	if (PL_AudioFailed(hr)) goto failed;
+
+	IMMDevice_Release(endpoint);
+
+	PL_UpdateAudioDevice();
+	PL_StartAudioDevice();
+
+	return;
+
+failed:
+	PL_CloseAudioDevice();
+	IMMDevice_Release(endpoint);
+
+	Device.flags |= PL_AudioDevice_IsLost;
+
+	return;
+}
+
+static void PL_ReloadAudioDeviceIfLost(HANDLE event) {
+	if (Device.flags & PL_AudioDevice_IsLost) {
+		PL_CloseAudioDevice();
+		PL_OpenAudioDevice(nullptr, event);
+	} else if (Device.flags & PL_AudioDevice_IsNotPresent) {
+		PL_OpenAudioDevice(nullptr, event);
+	}
+}
+
+//HRESULT ApBackend_QueryInterface(IMMNotificationClient *_this, REFIID riid, void **ppvObject) {
+//	if (memcmp(&IID_IUnknown, riid, sizeof(IID_IUnknown)) == 0) {
+//		*ppvObject = (IUnknown *)_this;
+//	} else if (memcmp(&IID_IMMNotificationClient, riid, sizeof(IID_IMMNotificationClient)) == 0) {
+//		*ppvObject = (IMMNotificationClient *)_this;
+//	} else {
+//		*ppvObject = NULL;
+//		return E_NOINTERFACE;
+//	}
+//	return S_OK;
+//}
+//
+//ULONG ApBackend_AddRef(IMMNotificationClient *_this)  { 
+//	ApBackend *backend = (ApBackend *)_this; 
+//	return InterlockedIncrement(&backend->refcount);
+//}
+//
+//ULONG ApBackend_Release(IMMNotificationClient *_this) { 
+//	ApBackend *backend = (ApBackend *)_this; 
+//	ULONG res = InterlockedDecrement(&backend->refcount);
+//	if (res == 0) {
+//		for (int i = 0; i < ApEvent_Max; ++i) {
+//			CloseHandle(backend->events[i]);
+//		}
+//		for (int i = 0; i < ApDeviceKind_Max; ++i) {
+//			ApDevice_Release(&backend->devices[i]);
+//		}
+//		IMMDeviceEnumerator_Release(backend->enumerator);
+//		CoTaskMemFree(_this);
+//	}
+//	return res;
+//}
+//
+//HRESULT ApBackend_OnDeviceStateChanged(IMMNotificationClient *_this, LPCWSTR dev_id, DWORD state) {	
+//	ApBackend *backend = (ApBackend *)_this;
+//	ApDevice * current = &backend->devices[ApDeviceKind_Current];
+//
+//	if (state == DEVICE_STATE_ACTIVE || state == DEVICE_STATE_DISABLED)
+//		return S_OK;
+//
+//	if (lstrcmpW(dev_id, current->id) == 0) {
+//		// The current device is disconnected, load a new device
+//		if (ApBackend_LoadDevice(backend)) {
+//			SetEvent(backend->events[ApEvent_DeviceChanged]);
+//			DWORD wait = WaitForSingleObject(backend->events[ApEvent_DeviceInstalled], INFINITE);
+//			if (wait == WAIT_OBJECT_0) {
+//				ApDevice_Release(&backend->devices[ApDeviceKind_Backup]);
+//			}
+//			printf("state changed: loaded new device");
+//		}
+//	}
+//
+//	return S_OK;
+//}
+//
+//HRESULT ApBackend_OnDeviceAdded(IMMNotificationClient *_this, LPCWSTR dev_id) {
+//	return S_OK;
+//}
+//
+//HRESULT ApBackend_OnDeviceRemoved(IMMNotificationClient *_this, LPCWSTR dev_id) {
+//	return S_OK;
+//}
+//
+//HRESULT ApBackend_OnDefaultDeviceChanged(IMMNotificationClient *_this, EDataFlow flow, ERole role, LPCWSTR dev_id) {
+//	ApBackend *backend = (ApBackend *)_this;
+//	ApDevice * current = &backend->devices[ApDeviceKind_Current];
+//
+//	printf("default changed: %u %u\n", flow, role);
+//
+//	if (flow != eRender || role != eMultimedia)
+//		return S_OK;
+//
+//	if (lstrcmpW(dev_id, current->id) != 0) {
+//		// Load the new default device
+//		if (ApBackend_LoadDevice(backend)) {
+//			SetEvent(backend->events[ApEvent_DeviceChanged]);
+//			DWORD wait = WaitForSingleObject(backend->events[ApEvent_DeviceInstalled], INFINITE);
+//			if (wait == WAIT_OBJECT_0) {
+//				ApDevice_Release(&backend->devices[ApDeviceKind_Backup]);
+//				printf("default changed: loaded new device\n");
+//			}
+//		}
+//	}
+//
+//	return S_OK;
+//}
+//
+//HRESULT ApBackend_OnPropertyValueChanged(IMMNotificationClient *_this, LPCWSTR dev_id, const PROPERTYKEY key) {
+//	return S_OK;
+//}
+//
+//HRESULT ApBackend_Create(ApBackend **out) {
+//	ApBackend *backend = CoTaskMemAlloc(sizeof(*backend));
+//	if (!backend) {
+//		return E_OUTOFMEMORY;
+//	}
+//
+//	memset(backend, 0, sizeof(*backend));
+//
+//	backend->notification.lpVtbl = &backend->vtable;
+//	backend->vtable = (IMMNotificationClientVtbl) {
+//		.AddRef                 = ApBackend_AddRef,
+//		.Release                = ApBackend_Release,
+//		.QueryInterface         = ApBackend_QueryInterface,
+//		.OnDeviceStateChanged   = ApBackend_OnDeviceStateChanged,
+//		.OnDeviceAdded          = ApBackend_OnDeviceAdded,
+//		.OnDeviceRemoved        = ApBackend_OnDeviceRemoved,
+//		.OnDefaultDeviceChanged = ApBackend_OnDefaultDeviceChanged,
+//		.OnPropertyValueChanged = ApBackend_OnPropertyValueChanged
+//	};
+//
+//	backend->refcount = 1;
+//
+//	HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, &IID_IMMDeviceEnumerator, &backend->enumerator);
+//	if (FAILED(hr)) {
+//		CoTaskMemFree(backend);
+//		return hr;
+//	}
+//
+//	hr = IMMDeviceEnumerator_RegisterEndpointNotificationCallback(backend->enumerator, &backend->notification);
+//	if (FAILED(hr)) {
+//		IMMDeviceEnumerator_Release(backend->enumerator);
+//		CoTaskMemFree(backend);
+//		return hr;
+//	}
+//
+//	for (int i = 0; i < ApEvent_Max; ++i) {
+//		backend->events[i] = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+//		if (backend->events[i] == INVALID_HANDLE_VALUE) {
+//			for (int j = i - 1; j >= 0; ++j)
+//				CloseHandle(backend->events[i]);
+//			IMMDeviceEnumerator_Release(backend->enumerator);
+//			CoTaskMemFree(backend);
+//		}
+//	}
+//
+//	if (ApBackend_LoadDevice(backend)) {
+//		backend->devices[ApDeviceKind_Current] = backend->devices[ApDeviceKind_Backup];
+//		backend->devices[ApDeviceKind_Backup]  = (ApDevice){0};
+//		ApBackend_Start(backend);
+//	}
+//
+//	*out = backend;
+//
+//	return S_OK;
+//}
+
+DWORD WINAPI ApRenderThreadProc(LPVOID param) {
+	PL_InitAudioThread();
+
+	HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+	if (event == INVALID_HANDLE_VALUE) {
+		PL_FatalError(L"Failed to start audio thread");
+	}
+
+	PL_OpenAudioDevice(nullptr, event);
+
+	while (1) {
+		DWORD wait = WaitForSingleObject(event, 200);
+
+		if (wait == WAIT_OBJECT_0) {
+			PL_UpdateAudioDevice();
+		} else {
+			PL_ReloadAudioDeviceIfLost(event);
+		}
+	}
+
+
+	//ApBackend *backend = nullptr;
+	//hr = ApBackend_Create(&backend);
+	//if (FAILED(hr)) {
+	//	FatalAppExitW(0, L"Failed to initialize audio device");
+	//}
+
+	//while (1) {
+	//	static_assert(ApEvent_RequireUpdate == 0 && ApEvent_DeviceChanged == 1,
+	//		"RequireUpdate and DeviceChanged are the only events the audio thread needs to wait for");
+
+	//	DWORD event = WaitForMultipleObjects(2, backend->events, FALSE, INFINITE);
+
+	//	if (event == WAIT_OBJECT_0 + ApEvent_RequireUpdate) {
+	//		ApBackend_Update(backend);
+	//	} else if (event == WAIT_OBJECT_0 + ApEvent_DeviceChanged) {
+	//		ApDevice backup_device                 = backend->devices[ApDeviceKind_Backup];
+	//		backend->devices[ApDeviceKind_Backup]  = backend->devices[ApDeviceKind_Current];
+	//		backend->devices[ApDeviceKind_Current] = backup_device;
+	//		SetEvent(backend->events[ApEvent_DeviceInstalled]);
+	//		ApBackend_Start(backend);
+	//	}
+	//}
+
+	PL_DeinitAudioThread();
 
 	return 0;
 }
@@ -433,7 +537,7 @@ int main(int argc, char *argv[]) {
 
 	CurrentStream = Serialize(audio, &MaxSample);
 
-	HANDLE thread = CreateThread(nullptr, 0, AudioThreadProc, nullptr, 0, nullptr);
+	HANDLE thread = CreateThread(nullptr, 0, ApRenderThreadProc, nullptr, 0, nullptr);
 
 	WaitForSingleObject(thread, INFINITE);
 
