@@ -111,12 +111,23 @@ typedef struct PL_AudioDevice {
 	PL_AudioSpec        spec;
 	IAudioClient *      client;
 	IAudioRenderClient *render;
+	volatile LONG       playing;
 	WAVEFORMATEX *      format;
 	char16_t *          id;
 } PL_AudioDevice;
 
+typedef enum PL_AudioEvent {
+	PL_AudioEvent_Update,
+	PL_AudioEvent_Play,
+	PL_AudioEvent_Pause,
+	PL_AudioEvent_Reset,
+	PL_AudioEvent_EnumMax
+} PL_AudioEvent;
+
 static struct {
 	volatile LONG        Initialized;
+	volatile LONG        Guard;
+	HANDLE               Events[PL_AudioEvent_EnumMax];
 	HANDLE               Thread;
 	IMMDeviceEnumerator *DeviceEnumerator;
 	PL_AudioUpdateProc   UpdateProc;
@@ -137,6 +148,20 @@ static void PL_InitAudioThread(void) {
 	}
 
 	hr = CoCreateInstance(&PL_CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, &PL_IID_IMMDeviceEnumerator, &G.DeviceEnumerator);
+	if (FAILED(hr)) {
+		FatalAppExitW(0, L"Failed to initialize audio thread");
+	}
+
+	G.Events[PL_AudioEvent_Update] = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+	G.Events[PL_AudioEvent_Play]   = CreateSemaphoreW(nullptr, 0, 255, nullptr);
+	G.Events[PL_AudioEvent_Pause]  = CreateSemaphoreW(nullptr, 0, 255, nullptr);
+	G.Events[PL_AudioEvent_Reset]  = CreateSemaphoreW(nullptr, 0, 255, nullptr);
+
+	for (int i = 0; i < PL_AudioEvent_EnumMax; ++i) {
+		if (!G.Events[i]) {
+			PL_FatalError(L"Failed to start audio thread");
+		}
+	}
 }
 
 static void PL_CloseAudioDevice(void) {
@@ -151,6 +176,11 @@ static void PL_CloseAudioDevice(void) {
 static void PL_DeinitAudioThread(void) {
 	PL_CloseAudioDevice();
 
+	for (int i = 0; i < PL_AudioEvent_EnumMax; ++i) {
+		CloseHandle(G.Events[i]);
+		G.Events[i] = nullptr;
+	}
+
 	if (G.DeviceEnumerator)
 		IMMDeviceEnumerator_Release(G.DeviceEnumerator);
 	G.DeviceEnumerator = nullptr;
@@ -158,13 +188,19 @@ static void PL_DeinitAudioThread(void) {
 }
 
 static void PL_StartAudioDevice(void) {
-	HRESULT hr = IAudioClient_Start(G.Device.client);
+	InterlockedExchange(&G.Device.playing, 1);
+
+	HRESULT hr  = IAudioClient_Start(G.Device.client);
+	if (hr == AUDCLNT_E_NOT_STOPPED)
+		return;
 	if (PL_AudioFailed(hr)) {
 		G.Device.flags |= PL_AudioDevice_IsLost;
 	}
 }
 
 static void PL_StopAudioDevice(void) {
+	InterlockedExchange(&G.Device.playing, 0);
+
 	HRESULT hr = IAudioClient_Stop(G.Device.client);
 	if (PL_AudioFailed(hr)) {
 		G.Device.flags |= PL_AudioDevice_IsLost;
@@ -172,6 +208,9 @@ static void PL_StopAudioDevice(void) {
 }
 
 static void PL_ResetAudioDevice(void) {
+	InterlockedExchange(&G.Device.playing, 0);
+
+	PL_StopAudioDevice();
 	HRESULT hr = IAudioClient_Reset(G.Device.client);
 	if (PL_AudioFailed(hr)) {
 		G.Device.flags |= PL_AudioDevice_IsLost;
@@ -258,7 +297,7 @@ static void PL_TranslateSpec(PL_AudioSpec *dst, const WAVEFORMATEX *src) {
 
 }
 
-static void PL_OpenAudioDevice(char16_t *id, HANDLE event) {
+static void PL_OpenAudioDevice(char16_t *id) {
 	HRESULT hr;
 
 	IMMDevice *endpoint = nullptr;
@@ -305,7 +344,7 @@ static void PL_OpenAudioDevice(char16_t *id, HANDLE event) {
 	Assert(hr != AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED);
 	if (PL_AudioFailed(hr)) goto failed;
 
-	hr = IAudioClient_SetEventHandle(G.Device.client, event);
+	hr = IAudioClient_SetEventHandle(G.Device.client, G.Events[PL_AudioEvent_Update]);
 	if (PL_AudioFailed(hr)) goto failed;
 
 	hr = IAudioClient_GetBufferSize(G.Device.client, &G.Device.frames);
@@ -332,12 +371,12 @@ failed:
 	return;
 }
 
-static void PL_ReloadAudioDeviceIfLost(HANDLE event) {
+static void PL_ReloadAudioDeviceIfLost() {
 	if (G.Device.flags & PL_AudioDevice_IsLost) {
 		PL_CloseAudioDevice();
-		PL_OpenAudioDevice(nullptr, event);
+		PL_OpenAudioDevice(nullptr);
 	} else if (G.Device.flags & PL_AudioDevice_IsNotPresent) {
-		PL_OpenAudioDevice(nullptr, event);
+		PL_OpenAudioDevice(nullptr);
 	}
 }
 
@@ -491,20 +530,21 @@ static void PL_ReloadAudioDeviceIfLost(HANDLE event) {
 static DWORD WINAPI PL_AudioThreadThread(LPVOID param) {
 	PL_InitAudioThread();
 
-	HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-	if (event == INVALID_HANDLE_VALUE) {
-		PL_FatalError(L"Failed to start audio thread");
-	}
-
-	PL_OpenAudioDevice(nullptr, event);
+	PL_OpenAudioDevice(nullptr);
 
 	while (1) {
-		DWORD wait = WaitForSingleObject(event, 200);
+		DWORD wait = WaitForMultipleObjects(PL_AudioEvent_EnumMax, G.Events, FALSE, 200);
 
-		if (wait == WAIT_OBJECT_0) {
+		if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Update) {
 			PL_UpdateAudioDevice();
+		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Play) {
+			PL_StartAudioDevice();
+		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Pause) {
+			PL_StopAudioDevice();
+		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Reset) {
+			PL_ResetAudioDevice();
 		} else if (wait == WAIT_TIMEOUT) {
-			PL_ReloadAudioDeviceIfLost(event);
+			PL_ReloadAudioDeviceIfLost();
 		}
 	}
 
@@ -571,6 +611,22 @@ void PL_KillAudioThread(void) {
 	G.UpdateProc  = nullptr;
 	G.UserData    = nullptr;
 	G.Initialized = 0;
+}
+
+bool PL_IsAudioPlaying(void) {
+	return G.Device.playing != 0;
+}
+
+void PL_PauseAudio(void) {
+	ReleaseSemaphore(G.Events[PL_AudioEvent_Pause], 1, nullptr);
+}
+
+void PL_ResumeAudio(void) {
+	ReleaseSemaphore(G.Events[PL_AudioEvent_Play], 1, nullptr);
+}
+
+void PL_ResetAudio(void) {
+	ReleaseSemaphore(G.Events[PL_AudioEvent_Reset], 1, nullptr);
 }
 
 //
@@ -658,6 +714,8 @@ static i16 *CurrentStream = 0;
 static real Volume        = 0.5f;
 
 u32 UpdateAudio(struct PL_AudioSpec const *spec, Buffer samples, void *user) {
+	Assert(spec->format == PL_AudioFormat_R32 && spec->channels.count == 2);
+
 	umem size = samples.count * spec->channels.count;
 
 	r32 *dst  = (r32 *)samples.data;
@@ -696,6 +754,19 @@ int main(int argc, char *argv[]) {
 	for (;;) {
 		printf("> ");
 		int n = scanf_s("%s", input, (int)sizeof(input));
+
+		if (strcmp(input, "resume") == 0) {
+			PL_ResumeAudio();
+		} else if (strcmp(input, "pause") == 0) {
+			PL_PauseAudio();
+		} else if (strcmp(input, "stop") == 0) {
+			PL_ResetAudio();
+			CurrentSample = 0;
+		} else if (strcmp(input, "reset") == 0) {
+			PL_ResetAudio();
+			CurrentSample = 0;
+			PL_ResumeAudio();
+		}
 	}
 
 	return 0;
