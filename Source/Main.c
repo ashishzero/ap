@@ -1,9 +1,16 @@
-#define MICROSOFT_WINDOWS_WINBASE_H_DEFINE_INTERLOCKED_CPLUSPLUS_OVERLOADS 0
+#pragma warning(push)
+#pragma warning(disable: 5105)
+#define COBJMACROS
+
 #include <windows.h>
 #include <initguid.h>
 #include <mmdeviceapi.h>
 #include <Audioclient.h>
 #include <avrt.h>
+
+#pragma warning(pop)
+
+#pragma comment(lib, "Avrt.lib")
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,7 +19,6 @@
 
 #include "Platform.h"
 
-#pragma comment(lib, "Avrt.lib")
 
 DEFINE_GUID(CLSID_MMDeviceEnumerator, 0xbcde0395, 0xe52f, 0x467c, 0x8e, 0x3d, 0xc4, 0x57, 0x92, 0x91, 0x69, 0x2e);
 DEFINE_GUID(IID_IUnknown, 0x00000000, 0x0000, 0x0000, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46);
@@ -83,22 +89,6 @@ typedef struct Audio_Stream {
 
 #pragma pack(pop)
 
-_Noreturn void FatalWindowsError(void) {
-	DWORD error    = GetLastError();
-	LPWSTR message = L"Unknow Error";
-
-	if (error) {
-		FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-			NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-			(LPWSTR)&message, 0, NULL);
-	}
-
-	MessageBoxW(nullptr, message, L"Fatal Error", MB_ICONERROR | MB_OK);
-
-	TriggerBreakpoint();
-	ExitProcess(1);
-}
-
 i16 *Serialize(Audio_Stream *audio, uint *count) {
 	Wave_Data *ptr = &audio->data;
 	for (; ptr->id[0] == 'L';) {
@@ -112,18 +102,165 @@ i16 *Serialize(Audio_Stream *audio, uint *count) {
 	return (i16 *)(ptr + 1);
 }
 
-static IMMDeviceEnumerator *DeviceEnumerator;
-static IMMDevice *          Device;
-static IAudioClient *       AudioClient;
-static IAudioRenderClient * RenderClient;
-static IMMNotificationClient NotificationClient;
-static IMMNotificationClientVtbl NotificationClientTable;
+static uint MaxSample     = 0;
+static uint CurrentSample = 0;
+static i16 *CurrentStream = 0;
+static real Volume        = 0.5f;
 
-HRESULT IMMNotificationClient_QueryInterface(IMMNotificationClient *This, REFIID riid, void **ppvObject) {
+u32 LoadAudioSample(r32 *samples, u32 count, u32 channels, void *user_data) {
+	umem size = count * channels;
+
+	for (uint i = 0; i < size; i += channels) {
+		float l = (float)CurrentStream[CurrentSample + 0] / 32767.0f;
+		float r = (float)CurrentStream[CurrentSample + 1] / 32767.0f;
+
+		samples[i + 0] = Volume * l;
+		samples[i + 1] = Volume * r;
+
+		CurrentSample += 2;
+
+		if (CurrentSample >= MaxSample)
+			CurrentSample = 0;
+	}
+
+	return count;
+}
+
+bool ApBackend_Failed(HRESULT hr) {
+	if (SUCCEEDED(hr))
+		return false;
+
+	if (hr == AUDCLNT_E_DEVICE_INVALIDATED)
+		return true;
+
+	DWORD error    = GetLastError();
+	LPWSTR message = L"Fatal Backend Error";
+
+	if (error) {
+		FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+			NULL, error, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+			(LPWSTR)&message, 0, NULL);
+	}
+
+	FatalAppExitW(0, message);
+	return true;
+}
+
+typedef enum ApEvent {
+	ApEvent_RequireUpdate,
+	ApEvent_DeviceChanged,
+	ApEvent_DeviceInstalled,
+	ApEvent_Max,
+} ApEvent;
+
+typedef enum ApDeviceKind {
+	ApDeviceKind_Current,
+	ApDeviceKind_Backup,
+	ApDeviceKind_Max
+} ApDeviceKind;
+
+typedef struct ApDevice {
+	IAudioClient *            client;
+	IAudioRenderClient *      render;
+	UINT32                    frames;
+	WAVEFORMATEX *            format;
+	IMMDevice *               handle;
+} ApDevice;
+
+typedef struct ApBackend {
+	IMMNotificationClient     notification;
+	LONG volatile             refcount;
+	HANDLE                    events[ApEvent_Max];
+	ApDevice                  devices[ApDeviceKind_Max];
+	IMMDeviceEnumerator *     enumerator;
+	IMMNotificationClientVtbl vtable;
+} ApBackend;
+
+void ApDevice_Release(ApDevice *device) {
+	if (device->client) IAudioClient_Release(device->client);
+	if (device->render) IAudioRenderClient_Release(device->render);
+	if (device->format) CoTaskMemFree(device->format);
+	if (device->handle) IMMDevice_Release(device->handle);
+	memset(device, 0, sizeof(*device));
+}
+
+bool ApBackend_LoadDevice(ApBackend *backend) {
+	ApDevice_Release(&backend->devices[ApDeviceKind_Backup]);
+
+	IMMDeviceEnumerator *enumerator = backend->enumerator;
+	ApDevice *          device      = &backend->devices[ApDeviceKind_Backup];
+
+	HRESULT hr = IMMDeviceEnumerator_GetDefaultAudioEndpoint(enumerator, eRender, eMultimedia, &device->handle);
+	if (hr == E_NOTFOUND) {
+		// no audio output devices available
+		return false;
+	}
+	if (ApBackend_Failed(hr)) return false;
+
+	hr = IMMDevice_Activate(device->handle, &IID_IAudioClient, CLSCTX_ALL, nullptr, &device->client);
+	if (ApBackend_Failed(hr)) return false;
+
+	hr = IAudioClient_GetMixFormat(device->client, &device->format);
+	if (ApBackend_Failed(hr)) return false;
+
+	REFERENCE_TIME device_period;
+	hr = IAudioClient_GetDevicePeriod(device->client, nullptr, &device_period);
+	if (ApBackend_Failed(hr)) return false;
+
+	hr = IAudioClient_Initialize(device->client, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+		device_period, device_period, device->format, nullptr);
+	Assert(hr != AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED);
+	if (ApBackend_Failed(hr)) return false;
+
+	return true;
+}
+
+void ApBackend_Update(ApBackend *backend) {
+	ApDevice *device = &backend->devices[ApDeviceKind_Current];
+
+	UINT32 padding = 0;
+	HRESULT hr = IAudioClient_GetCurrentPadding(device->client, &padding);
+	if (ApBackend_Failed(hr)) return;
+
+	UINT32 frames = device->frames - padding;
+	BYTE *data    = nullptr;
+	hr = IAudioRenderClient_GetBuffer(device->render, frames, &data);
+	if (ApBackend_Failed(hr)) return;
+
+	u32 written = LoadAudioSample((r32 *)data, frames, device->format->nChannels, nullptr);
+
+	hr = IAudioRenderClient_ReleaseBuffer(device->render, written, 0);
+	if (ApBackend_Failed(hr)) return;
+}
+
+void ApBackend_Start(ApBackend *backend) {
+	ResetEvent(backend->events[ApEvent_RequireUpdate]);
+
+	HRESULT hr;
+	ApDevice *device = &backend->devices[ApDeviceKind_Current];
+
+	if (!device->client) return;
+
+	hr = IAudioClient_SetEventHandle(device->client, backend->events[ApEvent_RequireUpdate]);
+	if (ApBackend_Failed(hr)) return;
+
+	hr = IAudioClient_GetBufferSize(device->client, &device->frames);
+	if (ApBackend_Failed(hr)) return;
+
+	hr = IAudioClient_GetService(device->client, &IID_IAudioRenderClient, &device->render);
+	if (ApBackend_Failed(hr)) return;
+
+	ApBackend_Update(backend);
+
+	hr = IAudioClient_Start(device->client);
+	if (ApBackend_Failed(hr)) return;
+}
+
+HRESULT ApBackend_QueryInterface(IMMNotificationClient *_this, REFIID riid, void **ppvObject) {
 	if (memcmp(&IID_IUnknown, riid, sizeof(IID_IUnknown)) == 0) {
-		*ppvObject = (IUnknown *)This;
+		*ppvObject = (IUnknown *)_this;
 	} else if (memcmp(&IID_IMMNotificationClient, riid, sizeof(IID_IMMNotificationClient)) == 0) {
-		*ppvObject = (IMMNotificationClient *)This;
+		*ppvObject = (IMMNotificationClient *)_this;
 	} else {
 		*ppvObject = NULL;
 		return E_NOINTERFACE;
@@ -131,28 +268,44 @@ HRESULT IMMNotificationClient_QueryInterface(IMMNotificationClient *This, REFIID
 	return S_OK;
 }
 
-ULONG IMMNotificationClient_AddRef(IMMNotificationClient *This)  { return 2; }
-ULONG IMMNotificationClient_Release(IMMNotificationClient *This) { return 1; }
+ULONG ApBackend_AddRef(IMMNotificationClient *_this)  { 
+	ApBackend *backend = (ApBackend *)_this; 
+	return InterlockedIncrement(&backend->refcount);
+}
 
-HRESULT IMMNotificationClient_OnDeviceStateChanged(IMMNotificationClient *This, LPCWSTR dev_id, DWORD state) {
+ULONG ApBackend_Release(IMMNotificationClient *_this) { 
+	ApBackend *backend = (ApBackend *)_this; 
+	ULONG res = InterlockedDecrement(&backend->refcount);
+	if (res == 0) {
+		for (int i = 0; i < ApEvent_Max; ++i) {
+			CloseHandle(backend->events[i]);
+		}
+		for (int i = 0; i < ApDeviceKind_Max; ++i) {
+			ApDevice_Release(&backend->devices[i]);
+		}
+		IMMDeviceEnumerator_Release(backend->enumerator);
+		CoTaskMemFree(_this);
+	}
+	return res;
+}
+
+HRESULT ApBackend_OnDeviceStateChanged(IMMNotificationClient *_this, LPCWSTR dev_id, DWORD state) {
+	ApBackend *backend = (ApBackend *)_this;
 	printf("%S changed: %u\n", dev_id, state);
-
 	return S_OK;
 }
 
-HRESULT IMMNotificationClient_OnDeviceAdded(IMMNotificationClient *This, LPCWSTR dev_id) {
+HRESULT ApBackend_OnDeviceAdded(IMMNotificationClient *_this, LPCWSTR dev_id) {
 	printf("%S added\n", dev_id);
-
 	return S_OK;
 }
 
-HRESULT IMMNotificationClient_OnDeviceRemoved(IMMNotificationClient *This, LPCWSTR dev_id) {
+HRESULT ApBackend_OnDeviceRemoved(IMMNotificationClient *_this, LPCWSTR dev_id) {
 	printf("%S removed\n", dev_id);
-
 	return S_OK;
 }
 
-HRESULT IMMNotificationClient_OnDefaultDeviceChanged(IMMNotificationClient *This, EDataFlow flow, ERole role, LPCWSTR dev_id) {
+HRESULT ApBackend_OnDefaultDeviceChanged(IMMNotificationClient *_this, EDataFlow flow, ERole role, LPCWSTR dev_id) {
 	const char *flow_str = "";
 	if (flow == eRender) flow_str = "render";
 	else if (flow == eCapture) flow_str = "capture";
@@ -168,152 +321,101 @@ HRESULT IMMNotificationClient_OnDefaultDeviceChanged(IMMNotificationClient *This
 	return S_OK;
 }
 
-HRESULT IMMNotificationClient_OnPropertyValueChanged(IMMNotificationClient *This, LPCWSTR dev_id, const PROPERTYKEY key) {
+HRESULT ApBackend_OnPropertyValueChanged(IMMNotificationClient *_this, LPCWSTR dev_id, const PROPERTYKEY key) {
 	return S_OK;
 }
 
-static uint MaxSample     = 0;
-static uint CurrentSample = 0;
-static i16 *CurrentStream = 0;
+HRESULT ApBackend_Create(ApBackend **out) {
+	ApBackend *backend = CoTaskMemAlloc(sizeof(*backend));
+	if (!backend) {
+		return E_OUTOFMEMORY;
+	}
 
-DWORD WINAPI AudioThread(LPVOID param) {
+	memset(backend, 0, sizeof(*backend));
 
-	HRESULT hresult;
+	backend->notification.lpVtbl = &backend->vtable;
+	backend->vtable = (IMMNotificationClientVtbl) {
+		.AddRef                 = ApBackend_AddRef,
+		.Release                = ApBackend_Release,
+		.QueryInterface         = ApBackend_QueryInterface,
+		.OnDeviceStateChanged   = ApBackend_OnDeviceStateChanged,
+		.OnDeviceAdded          = ApBackend_OnDeviceAdded,
+		.OnDeviceRemoved        = ApBackend_OnDeviceRemoved,
+		.OnDefaultDeviceChanged = ApBackend_OnDefaultDeviceChanged,
+		.OnPropertyValueChanged = ApBackend_OnPropertyValueChanged
+	};
+
+	backend->refcount = 1;
+
+	HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, &IID_IMMDeviceEnumerator, &backend->enumerator);
+	if (FAILED(hr)) {
+		CoTaskMemFree(backend);
+		return hr;
+	}
+
+	hr = IMMDeviceEnumerator_RegisterEndpointNotificationCallback(backend->enumerator, &backend->notification);
+	if (FAILED(hr)) {
+		IMMDeviceEnumerator_Release(backend->enumerator);
+		CoTaskMemFree(backend);
+		return hr;
+	}
+
+	for (int i = 0; i < ApEvent_Max; ++i) {
+		backend->events[i] = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+		if (backend->events[i] == INVALID_HANDLE_VALUE) {
+			for (int j = i - 1; j >= 0; ++j)
+				CloseHandle(backend->events[i]);
+			IMMDeviceEnumerator_Release(backend->enumerator);
+			CoTaskMemFree(backend);
+		}
+	}
+
+	if (ApBackend_LoadDevice(backend)) {
+		backend->devices[ApDeviceKind_Current] = backend->devices[ApDeviceKind_Backup];
+		backend->devices[ApDeviceKind_Backup]  = (ApDevice){0};
+		ApBackend_Start(backend);
+	}
+
+	*out = backend;
+
+	return S_OK;
+}
+
+DWORD WINAPI AudioThreadProc(LPVOID param) {
+	HRESULT hr;
 
 	DWORD task_index;
 	AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index);
 
-	hresult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-	if (hresult != S_OK && hresult != S_FALSE && hresult != RPC_E_CHANGED_MODE) {
-		FatalWindowsError();
+	hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+	if (hr != S_OK && hr != S_FALSE && hr != RPC_E_CHANGED_MODE) {
+		FatalAppExitW(0, L"Failed to initialize audio device");
 	}
 
-	hresult = CoCreateInstance(&CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, &IID_IMMDeviceEnumerator, &DeviceEnumerator);
-	if (FAILED(hresult)) FatalWindowsError();
-
-	hresult = DeviceEnumerator->lpVtbl->GetDefaultAudioEndpoint(DeviceEnumerator, eRender, eMultimedia, &Device);
-	if (FAILED(hresult)) FatalWindowsError();
-
-	NotificationClient.lpVtbl = &NotificationClientTable;
-
-	NotificationClient.lpVtbl->AddRef                 = IMMNotificationClient_AddRef;
-	NotificationClient.lpVtbl->Release                = IMMNotificationClient_Release;
-	NotificationClient.lpVtbl->QueryInterface         = IMMNotificationClient_QueryInterface;
-	NotificationClient.lpVtbl->OnDeviceAdded          = IMMNotificationClient_OnDeviceAdded;
-	NotificationClient.lpVtbl->OnDeviceRemoved        = IMMNotificationClient_OnDeviceRemoved;
-	NotificationClient.lpVtbl->OnDefaultDeviceChanged = IMMNotificationClient_OnDefaultDeviceChanged;
-	NotificationClient.lpVtbl->OnDeviceStateChanged   = IMMNotificationClient_OnDeviceStateChanged;
-	NotificationClient.lpVtbl->OnPropertyValueChanged = IMMNotificationClient_OnPropertyValueChanged;
-
-	hresult = DeviceEnumerator->lpVtbl->RegisterEndpointNotificationCallback(DeviceEnumerator, &NotificationClient);
-	if (FAILED(hresult)) FatalWindowsError();
-
-	hresult = Device->lpVtbl->Activate(Device, &IID_IAudioClient, CLSCTX_ALL, nullptr, &AudioClient);
-	if (FAILED(hresult)) FatalWindowsError();
-
-	WAVEFORMATEX *format = nullptr;
-
-	hresult = AudioClient->lpVtbl->GetMixFormat(AudioClient, &format);
-	if (FAILED(hresult)) FatalWindowsError();
-
-	REFERENCE_TIME requested_duration;
-
-	hresult = AudioClient->lpVtbl->GetDevicePeriod(AudioClient, NULL, &requested_duration);
-	if (FAILED(hresult)) FatalWindowsError();
-
-	hresult = AudioClient->lpVtbl->Initialize(AudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-		requested_duration, requested_duration, format, nullptr);
-	if (hresult == AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED) {
-		const REFERENCE_TIME REFTIMES_PER_SEC = 10000000;
-
-		// Align the buffer if needed, see IAudioClient::Initialize() documentation
-		UINT32 frames = 0;
-		hresult = AudioClient->lpVtbl->GetBufferSize(AudioClient, &frames);
-		if (FAILED(hresult)) FatalWindowsError();
-		requested_duration = (REFERENCE_TIME)((double)REFTIMES_PER_SEC / format->nSamplesPerSec * frames + 0.5);
-		hresult = AudioClient->lpVtbl->Initialize(AudioClient, AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-			requested_duration, requested_duration, format, nullptr);
-	}
-	if (FAILED(hresult)) FatalWindowsError();
-
-	HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-
-	hresult = AudioClient->lpVtbl->SetEventHandle(AudioClient, event);
-	if (FAILED(hresult)) FatalWindowsError();
-
-	UINT32 frame_count;
-	hresult = AudioClient->lpVtbl->GetBufferSize(AudioClient, &frame_count);
-	if (FAILED(hresult)) FatalWindowsError();
-
-	hresult = AudioClient->lpVtbl->GetService(AudioClient, &IID_IAudioRenderClient, &RenderClient);
-	if (FAILED(hresult)) FatalWindowsError();
-
-	BYTE *data = nullptr;
-	hresult = RenderClient->lpVtbl->GetBuffer(RenderClient, frame_count, &data);
-	if (FAILED(hresult)) FatalWindowsError();
-
-	r32 *samples = (r32 *)data;
-	uint count   = format->nChannels * frame_count;
-
-	float v = .5f;
-
-	for (uint i = 0; i < count; i += format->nChannels) {
-		float l = (float)CurrentStream[CurrentSample + 0] / 32767.0f;
-		float r = (float)CurrentStream[CurrentSample + 1] / 32767.0f;
-
-		samples[i + 0] = v * l;
-		samples[i + 1] = v * r;
-
-		CurrentSample += 2;
-
-		if (CurrentSample >= MaxSample)
-			CurrentSample=0;
+	ApBackend *backend = nullptr;
+	hr = ApBackend_Create(&backend);
+	if (FAILED(hr)) {
+		FatalAppExitW(0, L"Failed to initialize audio device");
 	}
 
-	hresult = RenderClient->lpVtbl->ReleaseBuffer(RenderClient, frame_count, 0);
-		if (FAILED(hresult)) FatalWindowsError();
+	while (1) {
+		static_assert(ApEvent_RequireUpdate == 0 && ApEvent_DeviceChanged == 1,
+			"RequireUpdate and DeviceChanged are the only events the audio thread needs to wait for");
 
-	double actual_duration = 10000000.0 * frame_count / format->nSamplesPerSec;
+		DWORD event = WaitForMultipleObjects(2, backend->events, FALSE, INFINITE);
 
-	hresult = AudioClient->lpVtbl->Start(AudioClient);
-	if (FAILED(hresult)) FatalWindowsError();
-
-	UINT flags = 0;
-
-	while (flags != AUDCLNT_BUFFERFLAGS_SILENT) {
-		WaitForSingleObject(event, INFINITE);
-
-		UINT32 padding = 0;
-		hresult = AudioClient->lpVtbl->GetCurrentPadding(AudioClient, &padding);
-		if (FAILED(hresult)) FatalWindowsError();
-
-		uint frames_aval = frame_count-padding;
-
-		//printf("rendering %u frames\n", frames_aval);
-
-		hresult = RenderClient->lpVtbl->GetBuffer(RenderClient, frames_aval, &data);
-		if (FAILED(hresult)) FatalWindowsError();
-
-		samples = (r32 *)data;
-		count = frames_aval * format->nChannels;
-
-		for (uint i = 0; i < count; i += format->nChannels) {
-			float l = (float)CurrentStream[CurrentSample + 0] / 32767.0f;
-			float r = (float)CurrentStream[CurrentSample + 1] / 32767.0f;
-
-			samples[i + 0] = v * l;
-			samples[i + 1] = v * r;
-
-			CurrentSample += 2;
-
-			if (CurrentSample >= MaxSample)
-				CurrentSample=0;
+		if (event == WAIT_OBJECT_0 + ApEvent_RequireUpdate) {
+			ApBackend_Update(backend);
+		} else if (event == WAIT_OBJECT_0 + ApEvent_DeviceChanged) {
+			ApDevice backup_device                 = backend->devices[ApDeviceKind_Backup];
+			backend->devices[ApDeviceKind_Backup]  = backend->devices[ApDeviceKind_Current];
+			backend->devices[ApDeviceKind_Current] = backup_device;
+			SetEvent(backend->events[ApEvent_DeviceInstalled]);
+			ApBackend_Start(backend);
 		}
-
-		hresult = RenderClient->lpVtbl->ReleaseBuffer(RenderClient, frames_aval, flags);
-		if (FAILED(hresult)) FatalWindowsError();
 	}
 
+	ApBackend_Release(&backend->notification);
 	CoUninitialize();
 
 	return 0;
@@ -331,7 +433,7 @@ int main(int argc, char *argv[]) {
 
 	CurrentStream = Serialize(audio, &MaxSample);
 
-	HANDLE thread = CreateThread(nullptr, 0, AudioThread, nullptr, 0, nullptr);
+	HANDLE thread = CreateThread(nullptr, 0, AudioThreadProc, nullptr, 0, nullptr);
 
 	WaitForSingleObject(thread, INFINITE);
 
