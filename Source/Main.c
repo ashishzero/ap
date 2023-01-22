@@ -271,24 +271,24 @@ static void PL_TranslateSpec(PL_AudioSpec *dst, const WAVEFORMATEX *src) {
 		dst->channels.mask |= PL_AudioChannel_FrontLeft;
 		dst->channels.mask |= PL_AudioChannel_FrontRight;
 	} else if (src->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-		if (ext->dwChannelMask & SPEAKER_FRONT_LEFT)            dst->channels.mask = PL_AudioChannel_FrontLeft;
-		if (ext->dwChannelMask & SPEAKER_FRONT_RIGHT)           dst->channels.mask = PL_AudioChannel_FrontRight;
-		if (ext->dwChannelMask & SPEAKER_FRONT_CENTER)          dst->channels.mask = PL_AudioChannel_FrontCenter;
-		if (ext->dwChannelMask & SPEAKER_LOW_FREQUENCY)         dst->channels.mask = PL_AudioChannel_LowFrequency;
-		if (ext->dwChannelMask & SPEAKER_BACK_LEFT)             dst->channels.mask = PL_AudioChannel_BackLeft;
-		if (ext->dwChannelMask & SPEAKER_BACK_RIGHT)            dst->channels.mask = PL_AudioChannel_BackRight;
-		if (ext->dwChannelMask & SPEAKER_FRONT_LEFT_OF_CENTER)  dst->channels.mask = PL_AudioChannel_FrontLeftOfCenter;
-		if (ext->dwChannelMask & SPEAKER_FRONT_RIGHT_OF_CENTER) dst->channels.mask = PL_AudioChannel_FrontRightOfCenter;
-		if (ext->dwChannelMask & SPEAKER_BACK_CENTER)           dst->channels.mask = PL_AudioChannel_BackCenter;
-		if (ext->dwChannelMask & SPEAKER_SIDE_LEFT)             dst->channels.mask = PL_AudioChannel_SideLeft;
-		if (ext->dwChannelMask & SPEAKER_SIDE_RIGHT)            dst->channels.mask = PL_AudioChannel_SideRight;
-		if (ext->dwChannelMask & SPEAKER_TOP_CENTER)            dst->channels.mask = PL_AudioChannel_TopCenter;
-		if (ext->dwChannelMask & SPEAKER_TOP_FRONT_LEFT)        dst->channels.mask = PL_AudioChannel_TopFrontLeft;
-		if (ext->dwChannelMask & SPEAKER_TOP_FRONT_CENTER)      dst->channels.mask = PL_AudioChannel_TopFrontCenter;
-		if (ext->dwChannelMask & SPEAKER_TOP_FRONT_RIGHT)       dst->channels.mask = PL_AudioChannel_TopFrontRight;
-		if (ext->dwChannelMask & SPEAKER_TOP_BACK_LEFT)         dst->channels.mask = PL_AudioChannel_TopBackLeft;
-		if (ext->dwChannelMask & SPEAKER_TOP_BACK_CENTER)       dst->channels.mask = PL_AudioChannel_TopBackCenter;
-		if (ext->dwChannelMask & SPEAKER_TOP_BACK_RIGHT)        dst->channels.mask = PL_AudioChannel_TopBackRight;
+		if (ext->dwChannelMask & SPEAKER_FRONT_LEFT)            dst->channels.mask |= PL_AudioChannel_FrontLeft;
+		if (ext->dwChannelMask & SPEAKER_FRONT_RIGHT)           dst->channels.mask |= PL_AudioChannel_FrontRight;
+		if (ext->dwChannelMask & SPEAKER_FRONT_CENTER)          dst->channels.mask |= PL_AudioChannel_FrontCenter;
+		if (ext->dwChannelMask & SPEAKER_LOW_FREQUENCY)         dst->channels.mask |= PL_AudioChannel_LowFrequency;
+		if (ext->dwChannelMask & SPEAKER_BACK_LEFT)             dst->channels.mask |= PL_AudioChannel_BackLeft;
+		if (ext->dwChannelMask & SPEAKER_BACK_RIGHT)            dst->channels.mask |= PL_AudioChannel_BackRight;
+		if (ext->dwChannelMask & SPEAKER_FRONT_LEFT_OF_CENTER)  dst->channels.mask |= PL_AudioChannel_FrontLeftOfCenter;
+		if (ext->dwChannelMask & SPEAKER_FRONT_RIGHT_OF_CENTER) dst->channels.mask |= PL_AudioChannel_FrontRightOfCenter;
+		if (ext->dwChannelMask & SPEAKER_BACK_CENTER)           dst->channels.mask |= PL_AudioChannel_BackCenter;
+		if (ext->dwChannelMask & SPEAKER_SIDE_LEFT)             dst->channels.mask |= PL_AudioChannel_SideLeft;
+		if (ext->dwChannelMask & SPEAKER_SIDE_RIGHT)            dst->channels.mask |= PL_AudioChannel_SideRight;
+		if (ext->dwChannelMask & SPEAKER_TOP_CENTER)            dst->channels.mask |= PL_AudioChannel_TopCenter;
+		if (ext->dwChannelMask & SPEAKER_TOP_FRONT_LEFT)        dst->channels.mask |= PL_AudioChannel_TopFrontLeft;
+		if (ext->dwChannelMask & SPEAKER_TOP_FRONT_CENTER)      dst->channels.mask |= PL_AudioChannel_TopFrontCenter;
+		if (ext->dwChannelMask & SPEAKER_TOP_FRONT_RIGHT)       dst->channels.mask |= PL_AudioChannel_TopFrontRight;
+		if (ext->dwChannelMask & SPEAKER_TOP_BACK_LEFT)         dst->channels.mask |= PL_AudioChannel_TopBackLeft;
+		if (ext->dwChannelMask & SPEAKER_TOP_BACK_CENTER)       dst->channels.mask |= PL_AudioChannel_TopBackCenter;
+		if (ext->dwChannelMask & SPEAKER_TOP_BACK_RIGHT)        dst->channels.mask |= PL_AudioChannel_TopBackRight;
 	}
 
 
