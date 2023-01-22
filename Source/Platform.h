@@ -253,3 +253,5 @@ typedef struct String {
     imem count;
     u8  *data;
 } String;
+
+typedef String Buffer;
