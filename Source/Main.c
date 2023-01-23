@@ -124,12 +124,13 @@ typedef enum PL_AudioEvent {
 } PL_AudioEvent;
 
 typedef struct PL_AudioEndpoint {
-	PL_AudioDevice     device;
-	HANDLE             events[PL_AudioEvent_EnumMax];
-	PL_AudioUpdateProc update;
-	void *             user;
-	volatile LONG      playing;
-	HANDLE             thread;
+	PL_AudioDevice        device;
+	HANDLE                events[PL_AudioEvent_EnumMax];
+	PL_AudioUpdateProc    update;
+	void *                user;
+	volatile LONG         playing;
+	HANDLE                thread;
+	WAVEFORMATEXTENSIBLE *want;
 } PL_AudioEndpoint;
 
 static struct {
@@ -137,7 +138,7 @@ static struct {
 	IMMDeviceEnumerator *DeviceEnumerator;
 } Instance;
 
-static void PL_InitAudioInstance(void) {
+void PL_InitAudioInstance(void) {
 	HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 	if (hr != S_OK && hr != S_FALSE && hr != RPC_E_CHANGED_MODE) {
 		FatalAppExitW(0, L"Failed to initialize audio instance");
@@ -154,14 +155,72 @@ static void PL_InitAudioInstance(void) {
 	}
 }
 
-static void PL_DeinitAudioInstance(void) {
+void PL_DeinitAudioInstance(void) {
 	if (IMMDeviceEnumerator_Release(Instance.DeviceEnumerator) == 0) {
 		InterlockedExchange(&Instance.Initialized, 0);
 		CoUninitialize();
 	}
 }
 
-static void PL_TranslateSpec(PL_AudioSpec *dst, const WAVEFORMATEX *src) {
+static void PL_TranslateAudioSpecToWaveFormat(WAVEFORMATEXTENSIBLE *dst, const PL_AudioSpec *src) {
+	memset(dst, 0, sizeof(*dst));
+
+	dst->Format.nSamplesPerSec = src->rate.secs;
+
+	if (src->channels.count == 2) {
+		if (src->format == PL_AudioFormat_R32) {
+			dst->Format.wFormatTag     = WAVE_FORMAT_IEEE_FLOAT;
+			dst->Format.wBitsPerSample = 32;
+		} else if (src->format == PL_AudioFormat_I32) {
+			dst->Format.wFormatTag     = WAVE_FORMAT_PCM;
+			dst->Format.wBitsPerSample = 32;
+		} else if (src->format == PL_AudioFormat_I16) {
+			dst->Format.wFormatTag     = WAVE_FORMAT_PCM;
+			dst->Format.wBitsPerSample = 16;
+		}
+		dst->Format.nChannels = 2;
+		dst->Format.cbSize    = sizeof(WAVEFORMATEX);
+	} else {
+		dst->Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+		if (src->format == PL_AudioFormat_R32) {
+			memcpy(&dst->SubFormat, &PL_KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, sizeof(GUID));
+			dst->Format.wBitsPerSample = 32;
+		} else if (src->format == PL_AudioFormat_I32) {
+			memcpy(&dst->SubFormat, &PL_KSDATAFORMAT_SUBTYPE_PCM, sizeof(GUID));
+			dst->Format.wBitsPerSample = 32;
+		} else if (src->format == PL_AudioFormat_I16) {
+			memcpy(&dst->SubFormat, &PL_KSDATAFORMAT_SUBTYPE_PCM, sizeof(GUID));
+			dst->Format.wBitsPerSample = 16;
+		}
+		dst->Format.nChannels = src->channels.count;
+
+		if (src->channels.mask & PL_AudioChannel_FrontLeft)          dst->dwChannelMask |=  SPEAKER_FRONT_LEFT;
+		if (src->channels.mask & PL_AudioChannel_FrontRight)         dst->dwChannelMask |=  SPEAKER_FRONT_RIGHT;
+		if (src->channels.mask & PL_AudioChannel_FrontCenter)        dst->dwChannelMask |=  SPEAKER_FRONT_CENTER;
+		if (src->channels.mask & PL_AudioChannel_LowFrequency)       dst->dwChannelMask |=  SPEAKER_LOW_FREQUENCY;
+		if (src->channels.mask & PL_AudioChannel_BackLeft)           dst->dwChannelMask |=  SPEAKER_BACK_LEFT;
+		if (src->channels.mask & PL_AudioChannel_BackRight)          dst->dwChannelMask |=  SPEAKER_BACK_RIGHT;
+		if (src->channels.mask & PL_AudioChannel_FrontLeftOfCenter)  dst->dwChannelMask |=  SPEAKER_FRONT_LEFT_OF_CENTER;
+		if (src->channels.mask & PL_AudioChannel_FrontRightOfCenter) dst->dwChannelMask |= SPEAKER_FRONT_RIGHT_OF_CENTER;
+		if (src->channels.mask & PL_AudioChannel_BackCenter)         dst->dwChannelMask |=  SPEAKER_BACK_CENTER;
+		if (src->channels.mask & PL_AudioChannel_SideLeft)           dst->dwChannelMask |=  SPEAKER_SIDE_LEFT;
+		if (src->channels.mask & PL_AudioChannel_SideRight)          dst->dwChannelMask |=  SPEAKER_SIDE_RIGHT;
+		if (src->channels.mask & PL_AudioChannel_TopCenter)          dst->dwChannelMask |=  SPEAKER_TOP_CENTER;
+		if (src->channels.mask & PL_AudioChannel_TopFrontLeft)       dst->dwChannelMask |=  SPEAKER_TOP_FRONT_LEFT;
+		if (src->channels.mask & PL_AudioChannel_TopFrontCenter)     dst->dwChannelMask |=  SPEAKER_TOP_FRONT_CENTER;
+		if (src->channels.mask & PL_AudioChannel_TopFrontRight)      dst->dwChannelMask |=  SPEAKER_TOP_FRONT_RIGHT;
+		if (src->channels.mask & PL_AudioChannel_TopBackLeft)        dst->dwChannelMask |=  SPEAKER_TOP_BACK_LEFT;
+		if (src->channels.mask & PL_AudioChannel_TopBackCenter)      dst->dwChannelMask |=  SPEAKER_TOP_BACK_CENTER;
+		if (src->channels.mask & PL_AudioChannel_TopBackRight)       dst->dwChannelMask |=  SPEAKER_TOP_BACK_RIGHT;
+
+		dst->Format.cbSize = sizeof(WAVEFORMATEXTENSIBLE);
+	}
+
+	dst->Format.nBlockAlign     = (dst->Format.nChannels * dst->Format.wBitsPerSample) / 8;
+	dst->Format.nAvgBytesPerSec = dst->Format.nSamplesPerSec * dst->Format.nBlockAlign;
+}
+
+static void PL_TranslateWaveFormatToAudioSpec(PL_AudioSpec *dst, const WAVEFORMATEX *src) {
 	const WAVEFORMATEXTENSIBLE *ext = (WAVEFORMATEXTENSIBLE *)src;
 
 	if (src->wFormatTag == WAVE_FORMAT_IEEE_FLOAT && src->wBitsPerSample == 32) {
@@ -222,7 +281,7 @@ static void PL_CloseAudioDevice(PL_AudioDevice *device) {
 	memset(device, 0, sizeof(*device));
 }
 
-static void PL_OpenAudioDevice(PL_AudioDevice *device, char16_t *id, HANDLE event) {
+static void PL_OpenAudioDevice(PL_AudioDevice *device, const char16_t *id, WAVEFORMATEXTENSIBLE *want, HANDLE event) {
 	HRESULT hr;
 
 	IMMDevice *endpoint = nullptr;
@@ -257,8 +316,16 @@ static void PL_OpenAudioDevice(PL_AudioDevice *device, char16_t *id, HANDLE even
 	hr = IMMDevice_Activate(endpoint, &PL_IID_IAudioClient, CLSCTX_ALL, nullptr, &device->client);
 	if (PL_AudioFailed(hr)) goto failed;
 
-	hr = IAudioClient_GetMixFormat(device->client, &device->format);
-	if (PL_AudioFailed(hr)) goto failed;
+	if (want) {
+		hr = IAudioClient_IsFormatSupported(device->client, AUDCLNT_SHAREMODE_SHARED, (WAVEFORMATEX *)want, &device->format);
+		if (hr != S_OK && hr != S_FALSE) {
+			hr = IAudioClient_GetMixFormat(device->client, &device->format);
+			if (PL_AudioFailed(hr)) goto failed;
+		}
+	} else {
+		hr = IAudioClient_GetMixFormat(device->client, &device->format);
+		if (PL_AudioFailed(hr)) goto failed;
+	}
 
 	REFERENCE_TIME device_period;
 	hr = IAudioClient_GetDevicePeriod(device->client, nullptr, &device_period);
@@ -269,7 +336,7 @@ static void PL_OpenAudioDevice(PL_AudioDevice *device, char16_t *id, HANDLE even
 	Assert(hr != AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED);
 	if (PL_AudioFailed(hr)) goto failed;
 
-	PL_TranslateSpec(&device->spec, device->format);
+	PL_TranslateWaveFormatToAudioSpec(&device->spec, device->format);
 
 	hr = IAudioClient_SetEventHandle(device->client, event);
 	if (PL_AudioFailed(hr)) goto failed;
@@ -326,9 +393,9 @@ static void PL_ImRecoverAudioDeviceIfLost(PL_AudioEndpoint *endpoint) {
 
 	if (device->flags & PL_AudioDevice_IsLost) {
 		PL_CloseAudioDevice(device);
-		PL_OpenAudioDevice(device, nullptr, endpoint->events[PL_AudioEvent_Update]);
+		PL_OpenAudioDevice(device, nullptr, endpoint->events[PL_AudioEvent_Update], endpoint->want);
 	} else if (device->flags & PL_AudioDevice_IsNotPresent) {
-		PL_OpenAudioDevice(device, nullptr, endpoint->events[PL_AudioEvent_Update]);
+		PL_OpenAudioDevice(device, nullptr, endpoint->events[PL_AudioEvent_Update], endpoint->want);
 	}
 }
 
@@ -411,10 +478,10 @@ void PL_CloseAudioEndpoint(PL_AudioEndpoint *endpoint) {
 	PL_DeinitAudioInstance();
 }
 
-PL_AudioEndpoint *PL_OpenAudioEndpoint(char16_t *device_id, PL_AudioUpdateProc update, void *user) {
+PL_AudioEndpoint *PL_OpenAudioEndpoint(const char16_t *device_id, const PL_AudioSpec *spec, PL_AudioUpdateProc update, void *user) {
 	PL_InitAudioInstance();
 
-	PL_AudioEndpoint *endpoint = CoTaskMemAlloc(sizeof(PL_AudioEndpoint));
+	PL_AudioEndpoint *endpoint = CoTaskMemAlloc(sizeof(PL_AudioEndpoint) + sizeof(WAVEFORMATEXTENSIBLE));
 	if (!endpoint) goto failed;
 
 	memset(endpoint, 0, sizeof(*endpoint));
@@ -435,7 +502,12 @@ PL_AudioEndpoint *PL_OpenAudioEndpoint(char16_t *device_id, PL_AudioUpdateProc u
 	endpoint->update = update;
 	endpoint->user   = user;
 
-	PL_OpenAudioDevice(&endpoint->device, device_id, endpoint->events[PL_AudioEvent_Update]);
+	if (spec) {
+		endpoint->want = (WAVEFORMATEXTENSIBLE *)(endpoint + 1);
+		PL_TranslateAudioSpecToWaveFormat(endpoint->want, spec);
+	}
+
+	PL_OpenAudioDevice(&endpoint->device, device_id, endpoint->want, endpoint->events[PL_AudioEvent_Update]);
 
 	endpoint->thread = CreateThread(nullptr, 0, PL_AudioThread, endpoint, 0, nullptr);
 	if (!endpoint->thread) {
@@ -470,6 +542,18 @@ void PL_ResumeAudioEndpoint(PL_AudioEndpoint *endpoint) {
 void PL_ResetAudioEndpoint(PL_AudioEndpoint *endpoint) {
 	ReleaseSemaphore(endpoint->events[PL_AudioEvent_Reset], 1, nullptr);
 }
+
+//void PL_EnumerateAudioDevices(void) {
+//	Assert(Instance.Initialized);
+//
+//	IMMDeviceCollection *devices = nullptr;
+//	HRESULT hr = IMMDeviceEnumerator_EnumAudioEndpoints(Instance.DeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &devices);
+//	if (FAILED(hr)) return;
+//
+//
+//
+//	IMMDeviceCollection_Release(devices);
+//}
 
 //HRESULT ApBackend_QueryInterface(IMMNotificationClient *_this, REFIID riid, void **ppvObject) {
 //	if (memcmp(&IID_IUnknown, riid, sizeof(IID_IUnknown)) == 0) {
@@ -736,7 +820,15 @@ int main(int argc, char *argv[]) {
 
 	CurrentStream = Serialize(audio, &MaxSample);
 
-	PL_AudioEndpoint *endpoint = PL_OpenAudioEndpoint(nullptr, UpdateAudio, nullptr);
+	PL_InitAudioInstance();
+
+	PL_AudioSpec spec = {
+		.format         = PL_AudioFormat_R32,
+		.channels.count = 2,
+		.rate.secs      = 48000
+	};
+
+	PL_AudioEndpoint *endpoint = PL_OpenAudioEndpoint(nullptr, &spec, UpdateAudio, nullptr);
 
 	PL_UpdateAudioEndpoint(endpoint);
 	PL_ResumeAudioEndpoint(endpoint);
@@ -764,6 +856,8 @@ int main(int argc, char *argv[]) {
 	}
 
 	PL_CloseAudioEndpoint(endpoint);
+
+	PL_DeinitAudioInstance();
 
 	return 0;
 }
