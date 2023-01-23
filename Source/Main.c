@@ -7,6 +7,7 @@
 #include <mmdeviceapi.h>
 #include <Audioclient.h>
 #include <avrt.h>
+#include <Functiondiscoverykeys_devpkey.h>
 
 #pragma warning(pop)
 
@@ -500,7 +501,7 @@ PL_AudioEndpoint *PL_OpenAudioEndpoint(const char16_t *device_id, const PL_Audio
 	endpoint->events[PL_AudioEvent_Play]   = CreateSemaphoreW(nullptr, 0, MAX_EVENTS, nullptr);
 	endpoint->events[PL_AudioEvent_Pause]  = CreateSemaphoreW(nullptr, 0, MAX_EVENTS, nullptr);
 	endpoint->events[PL_AudioEvent_Reset]  = CreateSemaphoreW(nullptr, 0, MAX_EVENTS, nullptr);
-	
+
 	for (int i = 0; i < PL_AudioEvent_EnumMax; ++i) {
 		if (!endpoint->events[i]) {
 			PL_FatalError(L"Failed to open audio endpoint");
@@ -554,17 +555,52 @@ void PL_ResetAudioEndpoint(PL_AudioEndpoint *endpoint) {
 	ReleaseSemaphore(endpoint->events[PL_AudioEvent_Reset], 1, nullptr);
 }
 
-//void PL_EnumerateAudioDevices(void) {
-//	Assert(Instance.Initialized);
-//
-//	IMMDeviceCollection *devices = nullptr;
-//	HRESULT hr = IMMDeviceEnumerator_EnumAudioEndpoints(Instance.DeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &devices);
-//	if (FAILED(hr)) return;
-//
-//
-//
-//	IMMDeviceCollection_Release(devices);
-//}
+void PL_EnumerateAudioDevices(void) {
+	Assert(Instance.Initialized);
+
+	IMMDeviceCollection *devices = nullptr;
+	HRESULT hr = IMMDeviceEnumerator_EnumAudioEndpoints(Instance.DeviceEnumerator, eRender, DEVICE_STATE_ACTIVE, &devices);
+	if (FAILED(hr)) goto failed;
+
+	UINT count;
+	hr = IMMDeviceCollection_GetCount(devices, &count);
+	if (FAILED(hr)) goto failed;
+
+	IMMDevice *device = nullptr;
+
+	for (UINT i = 0; i < count; ++i) {
+		hr = IMMDeviceCollection_Item(devices, i, &device);
+		if (FAILED(hr)) continue;
+
+		//char16_t *id = nullptr;
+		//hr = IMMDevice_GetId(device, &id);
+		//if (SUCCEEDED(hr)) {
+		//	printf(" %u. %S\n", i, id);
+		//	CoTaskMemFree(id);
+		//}
+
+		IPropertyStore *prop = nullptr;
+		hr = IMMDevice_OpenPropertyStore(device, STGM_READ, &prop);
+		if (SUCCEEDED(hr)) {
+			PROPVARIANT pv;
+			hr = IPropertyStore_GetValue(prop, &PKEY_Device_FriendlyName, &pv);
+			if (hr ==  S_OK || hr == INPLACE_S_TRUNCATED) {
+				if (pv.vt == VT_LPWSTR) {
+					char16_t *friendly_name = pv.pwszVal;
+					printf(" %u. %S\n", i, friendly_name);
+				}
+			}
+			IPropertyStore_Release(prop);
+		}
+
+		IMMDevice_Release(device);
+		device = nullptr;
+	}
+
+failed:
+	if (devices)
+		IMMDeviceCollection_Release(devices);
+}
 
 //HRESULT ApBackend_QueryInterface(IMMNotificationClient *_this, REFIID riid, void **ppvObject) {
 //	if (memcmp(&IID_IUnknown, riid, sizeof(IID_IUnknown)) == 0) {
@@ -864,6 +900,10 @@ int main(int argc, char *argv[]) {
 			PL_ResumeAudioEndpoint(endpoint);
 		} else if (strcmp(input, "quit") == 0) {
 			break;
+		} else if (strcmp(input, "list") == 0) {
+			PL_EnumerateAudioDevices();
+		} else {
+			printf("invalid command\n");
 		}
 	}
 
