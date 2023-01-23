@@ -242,16 +242,19 @@ typedef ptrdiff_t imem;
 //
 //
 
-#define ArrFmt              "{ %zd, %p }"
-#define ArrArg(x)           ((x).count), ((x).data)
-#define ArrSizeInBytes(arr) ((arr).count * sizeof(*((arr).data)))
-#define StrFmt              "%.*s"
-#define StrArg(x)           (int)((x).count), ((x).data)
-#define Str(x)              (String){ sizeof(x)-1, x }
+#define String(x) (string){ sizeof(x)-1, x }
 
-typedef struct String {
-    imem count;
-    u8  *data;
-} String;
+typedef struct string {
+	imem  count;
+	char *data;
+} string;
 
-typedef String Buffer;
+typedef struct string16 {
+	imem      count;
+	char16_t *data;
+} string16;
+
+typedef struct string32 {
+	imem      count;
+    char32_t *data;
+} string32;

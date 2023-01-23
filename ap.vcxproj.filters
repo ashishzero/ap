@@ -18,9 +18,15 @@
     <ClCompile Include="Source\Main.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Windows\KrModule.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Source\Platform.h">
+    <ClInclude Include="Source\KrPlatform.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\KrModule.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
