@@ -385,18 +385,20 @@ static void PL_ImUpdateAudioEndpoint(PL_AudioEndpoint *endpoint) {
 
 failed:
 	device->flags |= PL_AudioDevice_IsLost;
-	InterlockedExchange(&endpoint->playing, 0);
 }
 
-static void PL_ImRecoverAudioDeviceIfLost(PL_AudioEndpoint *endpoint) {
+static bool PL_ImRecoverAudioDeviceIfLost(PL_AudioEndpoint *endpoint) {
 	PL_AudioDevice *device = &endpoint->device;
 
 	if (device->flags & PL_AudioDevice_IsLost) {
 		PL_CloseAudioDevice(device);
-		PL_OpenAudioDevice(device, nullptr, endpoint->events[PL_AudioEvent_Update], endpoint->want);
+		PL_OpenAudioDevice(device, nullptr, endpoint->want, endpoint->events[PL_AudioEvent_Update]);
+		return true;
 	} else if (device->flags & PL_AudioDevice_IsNotPresent) {
-		PL_OpenAudioDevice(device, nullptr, endpoint->events[PL_AudioEvent_Update], endpoint->want);
+		PL_OpenAudioDevice(device, nullptr, endpoint->want, endpoint->events[PL_AudioEvent_Update]);
+		return true;
 	}
+	return false;
 }
 
 static DWORD WINAPI PL_AudioThread(LPVOID param) {
@@ -424,7 +426,6 @@ static DWORD WINAPI PL_AudioThread(LPVOID param) {
 			if (hr != AUDCLNT_E_NOT_STOPPED) {
 				if (PL_AudioFailed(hr)) {
 					endpoint->device.flags |= PL_AudioDevice_IsLost;
-					InterlockedExchange(&endpoint->playing, 0);
 				}
 			}
 		} break;
@@ -450,7 +451,14 @@ static DWORD WINAPI PL_AudioThread(LPVOID param) {
 
 		case WAIT_TIMEOUT:
 		{
-			PL_ImRecoverAudioDeviceIfLost(endpoint);
+			if (PL_ImRecoverAudioDeviceIfLost(endpoint)) {
+				if (endpoint->playing) {
+					HRESULT hr = IAudioClient_Start(endpoint->device.client);
+					if (PL_AudioFailed(hr)) {
+						endpoint->device.flags |= PL_AudioDevice_IsLost;
+					}
+				}
+			}
 		} break;
 		}
 	}
@@ -522,7 +530,10 @@ failed:
 }
 
 bool PL_IsAudioEndpointPlaying(PL_AudioEndpoint *endpoint) {
-	return endpoint->playing != 0;
+	if (endpoint->device.flags == 0) {
+		return endpoint->playing != 0;
+	}
+	return false;
 }
 
 void PL_UpdateAudioEndpoint(PL_AudioEndpoint *endpoint) {
@@ -849,6 +860,7 @@ int main(int argc, char *argv[]) {
 		} else if (strcmp(input, "reset") == 0) {
 			PL_ResetAudioEndpoint(endpoint);
 			CurrentSample = 0;
+			PL_UpdateAudioEndpoint(endpoint);
 			PL_ResumeAudioEndpoint(endpoint);
 		} else if (strcmp(input, "quit") == 0) {
 			break;
