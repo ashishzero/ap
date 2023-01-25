@@ -4,14 +4,17 @@
 typedef struct KrAudioSpec     KrAudioSpec;
 typedef struct KrAudioDevice   KrAudioDevice;
 typedef struct KrAudioContext  KrAudioContext;
-typedef struct KrAudioDeviceId KrAudioDeviceId;
+
+typedef struct KrAudioDeviceId {
+	void *PlatformSpecific;
+} KrAudioDeviceId;
 
 typedef u32  (*KrAudioUpdateProc)(KrAudioDevice *, KrAudioSpec *, u8 *, u32, void *);
 typedef void (*KrAudioResumedProc)(KrAudioDevice *);
 typedef void (*KrAudioPausedProc)(KrAudioDevice *);
 typedef void (*KrAudioResetProc)(KrAudioDevice *);
-typedef void (*KrAudioDeviceLostProc)(KrAudioDevice *, KrAudioDeviceId *);
-typedef void (*KrAudioDeviceGainedProc)(KrAudioDevice *, KrAudioDeviceId *);
+typedef void (*KrAudioDeviceLostProc)(KrAudioDevice *, KrAudioDeviceId);
+typedef void (*KrAudioDeviceGainedProc)(KrAudioDevice *, KrAudioDeviceId);
 
 struct KrAudioContext {
 	void *                  UserData;
@@ -60,10 +63,10 @@ struct KrAudioSpec {
 
 const char16_t * KrGetLastError();
 
-KrAudioDevice *  KrOpenAudioDevice(const KrAudioContext *ctx, const KrAudioSpec *spec, const KrAudioDeviceId *id);
-void             KrCloseAudioDevice(KrAudioDevice *device);
-bool             KrIsAudioDevicePlaying(KrAudioDevice *device);
-void             KrResumeAudioDevice(KrAudioDevice *device);
-void             KrPauseAudioDevice(KrAudioDevice *device);
-void             KrResetAudioDevice(KrAudioDevice *device);
-void             KrUpdateAudioDevice(KrAudioDevice *device);
+KrAudioDevice *  KrAudioDeviceOpen(const KrAudioContext *ctx, const KrAudioSpec *spec, const KrAudioDeviceId *id);
+void             KrAudioDeviceClose(KrAudioDevice *device);
+bool             KrAudioDeviceIsPlaying(KrAudioDevice *device);
+void             KrAudioDeviceResume(KrAudioDevice *device);
+void             KrAudioDevicePause(KrAudioDevice *device);
+void             KrAudioDeviceReset(KrAudioDevice *device);
+void             KrAudioDeviceUpdate(KrAudioDevice *device);

@@ -121,7 +121,7 @@ static void KrAudioSpecToWaveFormat(WAVEFORMATEXTENSIBLE *dst, const KrAudioSpec
 		if (src->ChannelMask & KrAudioChannel_BackLeft)           dst->dwChannelMask |=  SPEAKER_BACK_LEFT;
 		if (src->ChannelMask & KrAudioChannel_BackRight)          dst->dwChannelMask |=  SPEAKER_BACK_RIGHT;
 		if (src->ChannelMask & KrAudioChannel_FrontLeftOfCenter)  dst->dwChannelMask |=  SPEAKER_FRONT_LEFT_OF_CENTER;
-		if (src->ChannelMask & KrAudioChannel_FrontRightOfCenter) dst->dwChannelMask |= SPEAKER_FRONT_RIGHT_OF_CENTER;
+		if (src->ChannelMask & KrAudioChannel_FrontRightOfCenter) dst->dwChannelMask |=  SPEAKER_FRONT_RIGHT_OF_CENTER;
 		if (src->ChannelMask & KrAudioChannel_BackCenter)         dst->dwChannelMask |=  SPEAKER_BACK_CENTER;
 		if (src->ChannelMask & KrAudioChannel_SideLeft)           dst->dwChannelMask |=  SPEAKER_SIDE_LEFT;
 		if (src->ChannelMask & KrAudioChannel_SideRight)          dst->dwChannelMask |=  SPEAKER_SIDE_RIGHT;
@@ -193,10 +193,6 @@ static void KrWaveFormatToAudioSpec(KrAudioSpec *dst, const WAVEFORMATEX *src) {
 	dst->SamplesPerSecond = src->nSamplesPerSec;
 }
 
-typedef struct KrAudioDeviceId {
-	char16_t *Identifier;
-} KrAudioDeviceId;
-
 typedef enum KrAudioEvent {
 	KrAudioEvent_Update,
 	KrAudioEvent_Resume,
@@ -204,6 +200,15 @@ typedef enum KrAudioEvent {
 	KrAudioEvent_Reset,
 	KrAudioEvent_EnumMax
 } KrAudioEvent;
+
+typedef enum KrAudioCommandKind {
+	KrAudioCommand_Resume,
+	KrAudioCommand_Pause,
+	KrAudioCommand_Reset,
+	KrAudioCommand_Switch,
+	KrAudioCommand_Exit,
+	KrAudioCommand_EnumMax
+} KrAudioCommandKind;
 
 struct KrAudioDevice {
 	IAudioClient *        Client;
@@ -213,7 +218,7 @@ struct KrAudioDevice {
 	u32                   Frames;
 	HANDLE                Events[KrAudioEvent_EnumMax];
 	volatile LONG         Playing;
-	KrAudioDeviceId       DeviceId;
+	KrAudioDeviceId       FavourDeviceId;
 	HANDLE                Thread;
 	WAVEFORMATEXTENSIBLE  RequestedFormat;
 };
@@ -233,8 +238,8 @@ static bool KrAudioDeviceAttach(KrAudioDevice *device) {
 	IMMDevice *endpoint  = nullptr;
 	WAVEFORMATEX *format = nullptr;
 
-	if (device->DeviceId.Identifier) {
-		hr = IMMDeviceEnumerator_GetDevice(Audio.DeviceEnumerator, device->DeviceId.Identifier, &endpoint);
+	if (device->FavourDeviceId.PlatformSpecific) {
+		hr = IMMDeviceEnumerator_GetDevice(Audio.DeviceEnumerator, device->FavourDeviceId.PlatformSpecific, &endpoint);
 		if (hr == E_NOTFOUND || hr == E_OUTOFMEMORY) goto failed;
 		if (FAILED(hr)) KrInternalError();
 	} else {
@@ -242,7 +247,7 @@ static bool KrAudioDeviceAttach(KrAudioDevice *device) {
 		if (hr == E_NOTFOUND || hr == E_OUTOFMEMORY) goto failed;
 		if (FAILED(hr)) KrInternalError();
 
-		IMMDevice_GetId(endpoint, &device->DeviceId.Identifier);
+		IMMDevice_GetId(endpoint, (LPWSTR *)&device->FavourDeviceId.PlatformSpecific);
 	}
 
 	hr = IMMDevice_Activate(endpoint, &KR_IID_IAudioClient, CLSCTX_ALL, nullptr, &device->Client);
@@ -306,9 +311,9 @@ static DWORD WINAPI KrAudioThread(LPVOID param) {
 	KrAudioDevice *device = param;
 
 	if (KrAudioDeviceAttach(device)) {
-		device->Context.DeviceGained(device, &device->DeviceId);
+		device->Context.DeviceGained(device, device->FavourDeviceId);
 	} else {
-		device->Context.DeviceLost(device, &device->DeviceId);
+		device->Context.DeviceLost(device, device->FavourDeviceId);
 	}
 
 	while (1) {
@@ -341,7 +346,7 @@ static DWORD WINAPI KrAudioThread(LPVOID param) {
 				}
 			}
 		}
-		
+
 		else if (wait == WAIT_OBJECT_0 + KrAudioEvent_Resume) {
 			InterlockedExchange(&device->Playing, 1);
 			hr = IAudioClient_Start(device->Client);
@@ -351,7 +356,7 @@ static DWORD WINAPI KrAudioThread(LPVOID param) {
 			if (hr == AUDCLNT_E_NOT_STOPPED)
 				continue;
 		}
-		
+
 		else if (wait == WAIT_OBJECT_0 + KrAudioEvent_Pause) {
 			InterlockedExchange(&device->Playing, 0);
 			hr = IAudioClient_Stop(device->Client);
@@ -370,7 +375,7 @@ static DWORD WINAPI KrAudioThread(LPVOID param) {
 			InterlockedExchange(&device->Playing, 0);
 			device->Context.Paused(device);
 			KrAudioDeviceDetach(device);
-			device->Context.DeviceLost(device, &device->DeviceId);
+			device->Context.DeviceLost(device, device->FavourDeviceId);
 		} else if (FAILED(hr)) {
 			KrInternalError();
 		}
@@ -385,10 +390,10 @@ static u32  KrAudioUpdateFallback(KrAudioDevice *device, KrAudioSpec *spec, u8 *
 static void KrAudioResumedFallback(KrAudioDevice *device) {}
 static void KrAudioPausedFallback(KrAudioDevice *device) {}
 static void KrAudioResetFallback(KrAudioDevice *device) {}
-static void KrAudioDeviceLostFallback(KrAudioDevice *device, KrAudioDeviceId *id) {}
-static void KrAudioDeviceGainedFallback(KrAudioDevice *device, KrAudioDeviceId *id) {}
+static void KrAudioDeviceLostFallback(KrAudioDevice *device, KrAudioDeviceId id) {}
+static void KrAudioDeviceGainedFallback(KrAudioDevice *device, KrAudioDeviceId id) {}
 
-KrAudioDevice *KrOpenAudioDevice(const KrAudioContext *ctx, const KrAudioSpec *spec, const KrAudioDeviceId *id) {
+KrAudioDevice *KrAudioDeviceOpen(const KrAudioContext *ctx, const KrAudioSpec *spec, const KrAudioDeviceId *id) {
 	KrInitAudioInstance();
 
 	KrAudioDevice *device = CoTaskMemAlloc(sizeof(KrAudioDevice) + sizeof(WAVEFORMATEXTENSIBLE));
@@ -446,13 +451,13 @@ KrAudioDevice *KrOpenAudioDevice(const KrAudioContext *ctx, const KrAudioSpec *s
 
 	if (id) {
 		umem  id_length = 0;
-		for (const char16_t *first = id->Identifier; *first; ++first)
+		for (const char16_t *first = id->PlatformSpecific; *first; ++first)
 			id_length += 1;
 
-		device->DeviceId.Identifier = CoTaskMemAlloc(id_length + 1);
-		if (device->DeviceId.Identifier) {
-			memcpy(device->DeviceId.Identifier, id->Identifier, id_length * sizeof(char16_t));
-			device->DeviceId.Identifier[id_length] = 0;
+		device->FavourDeviceId.PlatformSpecific = CoTaskMemAlloc(id_length + 1);
+		if (device->FavourDeviceId.PlatformSpecific) {
+			memcpy(device->FavourDeviceId.PlatformSpecific, id->PlatformSpecific, id_length * sizeof(char16_t));
+			((u16 *)device->FavourDeviceId.PlatformSpecific)[id_length] = 0;
 		}
 	}
 
@@ -464,11 +469,11 @@ KrAudioDevice *KrOpenAudioDevice(const KrAudioContext *ctx, const KrAudioSpec *s
 	return device;
 
 failed:
-	KrCloseAudioDevice(device);
+	KrAudioDeviceClose(device);
 	return nullptr;
 }
 
-void KrCloseAudioDevice(KrAudioDevice *device) {
+void KrAudioDeviceClose(KrAudioDevice *device) {
 	if (device) {
 		if (device->Thread)
 			TerminateThread(device->Thread, 0);
@@ -480,8 +485,8 @@ void KrCloseAudioDevice(KrAudioDevice *device) {
 				CloseHandle(device->Events[i]);
 		}
 
-		if (device->DeviceId.Identifier) {
-			CoTaskMemFree(device->DeviceId.Identifier);
+		if (device->FavourDeviceId.PlatformSpecific) {
+			CoTaskMemFree(device->FavourDeviceId.PlatformSpecific);
 		}
 
 		CoTaskMemFree(device);
@@ -490,23 +495,23 @@ void KrCloseAudioDevice(KrAudioDevice *device) {
 	KrDeinitAudioInstance();
 }
 
-bool KrIsAudioDevicePlaying(KrAudioDevice *device) {
+bool KrAudioDeviceIsPlaying(KrAudioDevice *device) {
 	return device->Playing;
 }
 
-void KrResumeAudioDevice(KrAudioDevice *device) {
+void KrAudioDeviceResume(KrAudioDevice *device) {
 	ReleaseSemaphore(device->Events[KrAudioEvent_Resume], 1, 0);
 }
 
-void KrPauseAudioDevice(KrAudioDevice *device) {
+void KrAudioDevicePause(KrAudioDevice *device) {
 	ReleaseSemaphore(device->Events[KrAudioEvent_Pause], 1, 0);
 }
 
-void KrResetAudioDevice(KrAudioDevice *device) {
+void KrAudioDeviceReset(KrAudioDevice *device) {
 	ReleaseSemaphore(device->Events[KrAudioEvent_Reset], 1, 0);
 }
 
-void KrUpdateAudioDevice(KrAudioDevice *device) {
-	if (!KrIsAudioDevicePlaying(device))
+void KrAudioDeviceUpdate(KrAudioDevice *device) {
+	if (!KrAudioDeviceIsPlaying(device))
 		SetEvent(device->Events[KrAudioEvent_Update]);
 }
