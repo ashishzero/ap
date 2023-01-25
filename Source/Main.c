@@ -62,28 +62,18 @@ typedef enum KrAudioDeviceFlow {
 	KrAudioDeviceFlow_EnumMax
 } KrAudioDeviceFlow;
 
-enum KrAudioDeviceFlagBits {
-	KrAudioDevice_IsAvailable = 0x1,
-	KrAudioDevice_IsRender    = 0x2,
-	KrAudioDevice_IsCapture   = 0x4
-};
+typedef struct PL_KrDeviceName {
+	char Buffer[64];
+} PL_KrDeviceName;
 
 typedef struct KrAudioDevice {
 	struct KrAudioDevice *Next;
 	char *                Name;
 	KrAudioDeviceFlow     Flow;
 	volatile u32          Active;
+	LPWSTR                Id;
+	PL_KrDeviceName       Names[2];
 } KrAudioDevice;
-
-typedef struct PL_KrDeviceName {
-	char Buffer[64];
-} PL_KrDeviceName;
-
-typedef struct PL_KrAudioDevice {
-	KrAudioDevice   Base;
-	LPWSTR          Id;
-	PL_KrDeviceName Names[2];
-} PL_KrAudioDevice;
 
 static IMMNotificationClientVtbl g_NotificationClientVTable = {
 	.QueryInterface         = PL_QueryInterface,
@@ -100,9 +90,8 @@ static IMMNotificationClient g_NotificationClient = {
 	.lpVtbl = &g_NotificationClientVTable
 };
 
-static IMMDeviceEnumerator * g_DeviceEnumerator;
-static PL_KrAudioDevice      g_AudioDeviceListHead = { .Base.Name = "---", .Base.Flow = KrAudioDeviceFlow_EnumMax };
-static PL_KrAudioDevice     *g_AudioDeviceListTail = &g_AudioDeviceListHead;
+static IMMDeviceEnumerator * g_AudioDeviceEnumerator;
+static KrAudioDevice         g_AudioDeviceListHead = { .Name = "---", .Flow = KrAudioDeviceFlow_EnumMax };
 static volatile LONG         g_AudioDeviceListLock;
 
 //
@@ -111,7 +100,7 @@ static volatile LONG         g_AudioDeviceListLock;
 
 static IMMDevice *PL_IMMDeviceFromId(LPCWSTR id) {
 	IMMDevice *immdevice = nullptr;
-	HRESULT hr = g_DeviceEnumerator->lpVtbl->GetDevice(g_DeviceEnumerator, id, &immdevice);
+	HRESULT hr = g_AudioDeviceEnumerator->lpVtbl->GetDevice(g_AudioDeviceEnumerator, id, &immdevice);
 	if (SUCCEEDED(hr)) {
 		return immdevice;
 	}
@@ -135,7 +124,6 @@ static u32 PL_IMMDeviceActive(IMMDevice *immdevice) {
 	if (FAILED(hr)) {
 		Unimplemented();
 	}
-
 	return state == DEVICE_STATE_ACTIVE;
 }
 
@@ -182,13 +170,13 @@ static PL_KrDeviceName PL_IMMDeviceName(IMMDevice *immdevice) {
 	return name;
 }
 
-static PL_KrAudioDevice *PL_UpdateAudioDeviceList(IMMDevice *immdevice) {
+static KrAudioDevice *PL_UpdateAudioDeviceList(IMMDevice *immdevice) {
 	LPWSTR id = PL_IMMDeviceId(immdevice);
 	if (!id) {
 		return nullptr;
 	}
 
-	PL_KrAudioDevice *device = CoTaskMemAlloc(sizeof(*device));
+	KrAudioDevice *device = CoTaskMemAlloc(sizeof(*device));
 	if (!device) {
 		CoTaskMemFree(id);
 		return nullptr;
@@ -196,21 +184,28 @@ static PL_KrAudioDevice *PL_UpdateAudioDeviceList(IMMDevice *immdevice) {
 
 	memset(device, 0, sizeof(*device));
 
-	device->Id          = id;
-	device->Names[0]    = PL_IMMDeviceName(immdevice);
-	device->Base.Flow   = PL_IMMDeviceFlow(immdevice);
-	device->Base.Active = PL_IMMDeviceActive(immdevice);
-	device->Base.Name   = device->Names[0].Buffer;
+	device->Id       = id;
+	device->Names[0] = PL_IMMDeviceName(immdevice);
+	device->Flow     = PL_IMMDeviceFlow(immdevice);
+	device->Active   = PL_IMMDeviceActive(immdevice);
+	device->Name     = device->Names[0].Buffer;
 
-	g_AudioDeviceListTail->Base.Next = &device->Base;
-	g_AudioDeviceListTail = device;
+	// Insert in alphabetical order
+	KrAudioDevice *prev = &g_AudioDeviceListHead;
+	for (; prev->Next; prev = prev->Next) {
+		if (strcmp(prev->Next->Name, device->Name) >= 0)
+			break;
+	}
+
+	device->Next = prev->Next;
+	InterlockedExchangePointer(&prev->Next, device);
 
 	return device;
 }
 
-static PL_KrAudioDevice *PL_FindAudioDeviceFromId(LPCWSTR id) {
-	PL_KrAudioDevice *device = (PL_KrAudioDevice *)g_AudioDeviceListHead.Base.Next;
-	for (;device; device = (PL_KrAudioDevice *)device->Base.Next) {
+static KrAudioDevice *PL_FindAudioDeviceFromId(LPCWSTR id) {
+	KrAudioDevice *device = (KrAudioDevice *)g_AudioDeviceListHead.Next;
+	for (;device; device = (KrAudioDevice *)device->Next) {
 		if (wcscmp(id, device->Id) == 0)
 			return device;
 	}
@@ -240,10 +235,10 @@ static ULONG STDMETHODCALLTYPE PL_Release(IMMNotificationClient *This) {
 static HRESULT STDMETHODCALLTYPE PL_OnDeviceStateChanged(IMMNotificationClient *This, LPCWSTR deviceid, DWORD newstate) {
 	PL_AtomicLock(&g_AudioDeviceListLock);
 
-	PL_KrAudioDevice *device = PL_FindAudioDeviceFromId(deviceid);
+	KrAudioDevice *device = PL_FindAudioDeviceFromId(deviceid);
 	if (device) {
 		u32 active = (newstate == DEVICE_STATE_ACTIVE);
-		InterlockedExchange(&device->Base.Active, active);
+		InterlockedExchange(&device->Active, active);
 	} else {
 		// New device added
 		IMMDevice *immdevice = PL_IMMDeviceFromId(deviceid);
@@ -284,17 +279,17 @@ static HRESULT STDMETHODCALLTYPE PL_OnPropertyValueChanged(IMMNotificationClient
 
 		IMMDevice *immdevice = PL_IMMDeviceFromId(deviceid);
 		if (immdevice) {
-			PL_KrAudioDevice *device = PL_FindAudioDeviceFromId(deviceid);
+			KrAudioDevice *device = PL_FindAudioDeviceFromId(deviceid);
 			if (device) {
 				char *name_buff;
-				if (device->Names[0].Buffer == device->Base.Name) {
+				if (device->Names[0].Buffer == device->Name) {
 					device->Names[1] = PL_IMMDeviceName(immdevice);
 					name_buff = device->Names[1].Buffer;
 				} else {
 					device->Names[0] = PL_IMMDeviceName(immdevice);
 					name_buff = device->Names[0].Buffer;
 				}
-				InterlockedExchangePointer(&device->Base.Name, name_buff);
+				InterlockedExchangePointer(&device->Name, name_buff);
 			} else {
 				PL_UpdateAudioDeviceList(immdevice);
 			}
@@ -311,31 +306,31 @@ static HRESULT STDMETHODCALLTYPE PL_OnPropertyValueChanged(IMMNotificationClient
 //
 
 static void ShutdownAudio() {
-	if (g_DeviceEnumerator) {
-		g_DeviceEnumerator->lpVtbl->UnregisterEndpointNotificationCallback(g_DeviceEnumerator, &g_NotificationClient);
-		g_DeviceEnumerator->lpVtbl->Release(g_DeviceEnumerator);
-		g_DeviceEnumerator = nullptr;
+	if (g_AudioDeviceEnumerator) {
+		g_AudioDeviceEnumerator->lpVtbl->UnregisterEndpointNotificationCallback(g_AudioDeviceEnumerator, &g_NotificationClient);
+		g_AudioDeviceEnumerator->lpVtbl->Release(g_AudioDeviceEnumerator);
+		g_AudioDeviceEnumerator = nullptr;
 	}
 
-	for (PL_KrAudioDevice *ptr = (PL_KrAudioDevice *)g_AudioDeviceListHead.Base.Next; ptr; ) {
-		PL_KrAudioDevice *next = (PL_KrAudioDevice *)ptr->Base.Next;
+	for (KrAudioDevice *ptr = (KrAudioDevice *)g_AudioDeviceListHead.Next; ptr; ) {
+		KrAudioDevice *next = (KrAudioDevice *)ptr->Next;
 		CoTaskMemFree((void *)ptr->Id);
 		CoTaskMemFree(ptr);
 		ptr = next;
 	}
 
-	g_AudioDeviceListHead.Base.Next = nullptr;
+	g_AudioDeviceListHead.Next = nullptr;
 
 	g_AudioDeviceListLock = 0;
 }
 
 static void InitializeAudio() {
-	HRESULT hr = CoCreateInstance(&KR_CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, &KR_IID_IMMDeviceEnumerator, &g_DeviceEnumerator);
+	HRESULT hr = CoCreateInstance(&KR_CLSID_MMDeviceEnumerator, nullptr, CLSCTX_ALL, &KR_IID_IMMDeviceEnumerator, &g_AudioDeviceEnumerator);
 	if (FAILED(hr)) {
 		Unimplemented();
 	}
 
-	hr = g_DeviceEnumerator->lpVtbl->RegisterEndpointNotificationCallback(g_DeviceEnumerator, &g_NotificationClient);
+	hr = g_AudioDeviceEnumerator->lpVtbl->RegisterEndpointNotificationCallback(g_AudioDeviceEnumerator, &g_NotificationClient);
 	if (FAILED(hr)) {
 		Unimplemented();
 	}
@@ -344,7 +339,7 @@ static void InitializeAudio() {
 		// Enumerate all the audio devices
 
 		IMMDeviceCollection *device_col = nullptr;
-		hr = g_DeviceEnumerator->lpVtbl->EnumAudioEndpoints(g_DeviceEnumerator, eAll, DEVICE_STATEMASK_ALL, &device_col);
+		hr = g_AudioDeviceEnumerator->lpVtbl->EnumAudioEndpoints(g_AudioDeviceEnumerator, eAll, DEVICE_STATEMASK_ALL, &device_col);
 		if (FAILED(hr)) {
 			Unimplemented();
 		}
@@ -416,7 +411,7 @@ static const char *KrEventEnumName[] = {
 static_assert(ArrayCount(KrEventEnumName) == KrEvent_EnumCount, "");
 
 typedef struct KrAudioEvent {
-	const KrAudioDevice *Base;
+	KrAudioDevice *Device;
 } KrAudioEvent;
 
 typedef struct KrEvent {
@@ -426,16 +421,58 @@ typedef struct KrEvent {
 	} Data;
 } KrEvent;
 
-void ListAudioDevices() {
-	printf("Render devices\n");
-	for (KrAudioDevice *device = g_AudioDeviceListHead.Base.Next; device; device = device->Next) {
-		if (device->Flow == KrAudioDeviceFlow_Render)
-			printf(" [%c] %s\n", device->Active ? '*' : ' ', device->Name);
+enum KrAudioDeviceIterFlagBits {
+	KrAudioDeviceIter_Inactive    = 0x1,
+	KrAudioDeviceIter_RenderFlow  = 0x2,
+	KrAudioDeviceIter_CaptureFlow = 0x4,
+};
+
+typedef struct KrAudioDeviceIter {
+	void *Data;
+	u32   Flags;
+} KrAudioDeviceIter;
+
+void KrAudioDeviceIterInit(KrAudioDeviceIter *iter, u32 flags) {
+	iter->Data  = g_AudioDeviceListHead.Next;
+	iter->Flags = flags;
+	if ((flags & (KrAudioDeviceIter_RenderFlow | KrAudioDeviceIter_CaptureFlow)) == 0) {
+		flags |= KrAudioDeviceIter_RenderFlow | KrAudioDeviceIter_CaptureFlow;
 	}
+}
+
+KrAudioDevice *KrAudioDeviceIterNext(KrAudioDeviceIter *iter) {
+	bool inactive = iter->Flags & KrAudioDeviceIter_Inactive;
+	bool render   = iter->Flags & KrAudioDeviceIter_RenderFlow;
+	bool capture  = iter->Flags & KrAudioDeviceIter_CaptureFlow;
+
+	KrAudioDevice *device = iter->Data;
+	for (; device; device = device->Next) {
+		if (device->Active || inactive) {
+			if ((device->Flow == KrAudioDeviceFlow_Render && render) ||
+				(device->Flow == KrAudioDeviceFlow_Capture && capture)) {
+				iter->Data = device->Next;
+				return device;
+			}
+		}
+	}
+
+	return nullptr;
+}
+
+void ListAudioDevices() {
+	KrAudioDeviceIter iter;
+	KrAudioDevice *device;
+
+	printf("Render devices\n");
+	KrAudioDeviceIterInit(&iter, KrAudioDeviceIter_RenderFlow | KrAudioDeviceIter_Inactive);
+	while (device = KrAudioDeviceIterNext(&iter)) {
+		printf(" [%c] %s\n", device->Active ? '*' : ' ', device->Name);
+	}
+
 	printf("Capture devices\n");
-	for (KrAudioDevice *device = g_AudioDeviceListHead.Base.Next; device; device = device->Next) {
-		if (device->Flow == KrAudioDeviceFlow_Capture)
-			printf(" [%c] %s\n", device->Active ? '*' : ' ', device->Name);
+	KrAudioDeviceIterInit(&iter, KrAudioDeviceIter_CaptureFlow | KrAudioDeviceIter_Inactive);
+	while (device = KrAudioDeviceIterNext(&iter)) {
+		printf(" [%c] %s\n", device->Active ? '*' : ' ', device->Name);
 	}
 }
 
