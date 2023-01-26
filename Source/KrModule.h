@@ -2,19 +2,19 @@
 #include "KrPlatform.h"
 
 typedef struct KrAudioSpec     KrAudioSpec;
-typedef struct KrAudioDevice   KrAudioDevice;
+typedef struct PL_AudioDevice   PL_AudioDevice;
 typedef struct KrAudioContext  KrAudioContext;
 
 typedef struct KrAudioDeviceId {
 	void *PlatformSpecific;
 } KrAudioDeviceId;
 
-typedef u32  (*KrAudioUpdateProc)(KrAudioDevice *, KrAudioSpec *, u8 *, u32, void *);
-typedef void (*KrAudioResumedProc)(KrAudioDevice *);
-typedef void (*KrAudioPausedProc)(KrAudioDevice *);
-typedef void (*KrAudioResetProc)(KrAudioDevice *);
-typedef void (*KrAudioDeviceLostProc)(KrAudioDevice *, KrAudioDeviceId);
-typedef void (*KrAudioDeviceGainedProc)(KrAudioDevice *, KrAudioDeviceId);
+typedef u32  (*KrAudioUpdateProc)(PL_AudioDevice *, KrAudioSpec *, u8 *, u32, void *);
+typedef void (*KrAudioResumedProc)(PL_AudioDevice *);
+typedef void (*KrAudioPausedProc)(PL_AudioDevice *);
+typedef void (*KrAudioResetProc)(PL_AudioDevice *);
+typedef void (*KrAudioDeviceLostProc)(PL_AudioDevice *, KrAudioDeviceId);
+typedef void (*KrAudioDeviceGainedProc)(PL_AudioDevice *, KrAudioDeviceId);
 
 struct KrAudioContext {
 	void *                  UserData;
@@ -33,7 +33,7 @@ typedef enum KrAudioFormat {
 	KrAudioFormat_EnumMax
 } KrAudioFormat;
 
-enum KrAudioChannelMasks {
+enum KrAudioChannelMaskBits {
 	KrAudioChannel_FrontLeft          = 0x00001,
 	KrAudioChannel_FrontRight         = 0x00002,
 	KrAudioChannel_FrontCenter        = 0x00004,
@@ -63,10 +63,10 @@ struct KrAudioSpec {
 
 const char16_t * KrGetLastError();
 
-KrAudioDevice *  KrAudioDeviceOpen(const KrAudioContext *ctx, const KrAudioSpec *spec, const KrAudioDeviceId *id);
-void             KrAudioDeviceClose(KrAudioDevice *device);
-bool             KrAudioDeviceIsPlaying(KrAudioDevice *device);
-void             KrAudioDeviceResume(KrAudioDevice *device);
-void             KrAudioDevicePause(KrAudioDevice *device);
-void             KrAudioDeviceReset(KrAudioDevice *device);
-void             KrAudioDeviceUpdate(KrAudioDevice *device);
+PL_AudioDevice *  KrAudioDeviceOpen(const KrAudioContext *ctx, const KrAudioSpec *spec, const KrAudioDeviceId *id);
+void             KrAudioDeviceClose(PL_AudioDevice *device);
+bool             KrAudioDeviceIsPlaying(PL_AudioDevice *device);
+void             KrAudioDeviceResume(PL_AudioDevice *device);
+void             KrAudioDevicePause(PL_AudioDevice *device);
+void             KrAudioDeviceReset(PL_AudioDevice *device);
+void             KrAudioDeviceUpdate(PL_AudioDevice *device);
