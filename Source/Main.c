@@ -105,7 +105,8 @@ typedef enum PL_AudioEvent {
 	PL_AudioEvent_Resume,
 	PL_AudioEvent_Pause,
 	PL_AudioEvent_Reset,
-	PL_AudioEvent_Restart,
+	PL_AudioEvent_DeviceLost,
+	PL_AudioEvent_DeviceRestart,
 	PL_AudioEvent_EnumMax
 } PL_AudioEvent;
 
@@ -125,19 +126,19 @@ static IMMNotificationClient g_NotificationClient = {
 };
 
 static IMMDeviceEnumerator * g_AudioDeviceEnumerator;
-static PL_AudioDevice        g_AudioDeviceListHead = { .Name = "Default", .Flow = KrAudioDeviceFlow_EnumMax };
+static PL_AudioDevice        g_AudioDeviceListHead = { .Name = "", .Flow = KrAudioDeviceFlow_EnumMax };
 static volatile LONG         g_AudioDeviceListLock;
 
 static struct {
-	IAudioClient        * Client;
-	IAudioRenderClient  * RenderClient;
+	IAudioClient         *Client;
+	IAudioRenderClient   *RenderClient;
 	KrAudioSpec           Spec;
 	UINT                  MaxFrames;
 	HANDLE                Events[PL_AudioEvent_EnumMax];
 	volatile LONG         DeviceIsLost;
 	volatile LONG         DeviceIsResumed;
-	PL_AudioDevice      * EffectiveAudioDevice;
-	PL_AudioDevice      * DesiredAudioDevice;
+	PL_AudioDevice *      EffectiveAudioDevice;
+	PL_AudioDevice *      DesiredAudioDevice;
 	HANDLE                Thread;
 } g_AudioOut;
 
@@ -293,15 +294,24 @@ static HRESULT STDMETHODCALLTYPE PL_OnDeviceStateChanged(IMMNotificationClient *
 	PL_AtomicLock(&g_AudioDeviceListLock);
 
 	PL_AudioDevice *device = PL_FindAudioDeviceFromId(deviceid);
+	u32 active = (newstate == DEVICE_STATE_ACTIVE);
+
 	if (device) {
-		u32 active = (newstate == DEVICE_STATE_ACTIVE);
 		InterlockedExchange(&device->Active, active);
 	} else {
 		// New device added
 		IMMDevice *immdevice = PL_IMMDeviceFromId(deviceid);
 		if (immdevice) {
-			PL_UpdateAudioDeviceList(immdevice);
+			device = PL_UpdateAudioDeviceList(immdevice);
 			immdevice->lpVtbl->Release(immdevice);
+		}
+	}
+
+	if (device == InterlockedCompareExchangePointer(&g_AudioOut.DesiredAudioDevice, nullptr, nullptr)) {
+		if (active) {
+			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceRestart], 1, 0);
+		} else {
+			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceLost], 1, 0);
 		}
 	}
 
@@ -325,8 +335,8 @@ static HRESULT STDMETHODCALLTYPE PL_OnDefaultDeviceChanged(IMMNotificationClient
 	PL_AtomicLock(&g_AudioDeviceListLock);
 
 	if (flow == eRender && role == eMultimedia) {
-		if (g_AudioOut.DesiredAudioDevice == &g_AudioDeviceListHead) {
-			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_Restart], 1, 0);
+		if (InterlockedCompareExchangePointer(&g_AudioOut.DesiredAudioDevice, nullptr, nullptr) == nullptr) {
+			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceRestart], 1, 0);
 		}
 	}
 
@@ -415,10 +425,10 @@ static void PL_ReleaseAudioRenderDevice() {
 	InterlockedExchange(&g_AudioOut.DeviceIsLost, 1);
 }
 
-static bool PL_SetupAudioRenderDevice(PL_AudioDevice *device) {
+static bool PL_SetupAudioRenderDevice(const PL_AudioDevice *device) {
 	WAVEFORMATEX *wave_format = nullptr;
 
-	IMMDevice *immdevice = device->Id ? PL_IMMDeviceFromId(device->Id) : PL_GetDefaultIMMDeviceForRendering();
+	IMMDevice *immdevice = device ? PL_IMMDeviceFromId(device->Id) : PL_GetDefaultIMMDeviceForRendering();
 	if (!immdevice) return false;
 
 	HRESULT hr = immdevice->lpVtbl->Activate(immdevice, &KR_IID_IAudioClient, CLSCTX_ALL, nullptr, &g_AudioOut.Client);
@@ -453,6 +463,7 @@ static bool PL_SetupAudioRenderDevice(PL_AudioDevice *device) {
 
 	immdevice->lpVtbl->Release(immdevice);
 
+	InterlockedExchangePointer(&g_AudioOut.EffectiveAudioDevice, (PL_AudioDevice *)device);
 	InterlockedExchange(&g_AudioOut.DeviceIsLost, 0);
 
 	return true;
@@ -507,7 +518,7 @@ static void PL_ReleaseAudioBuffer(u32 written, u32 frames) {
 	Unimplemented();
 }
 
-u32 PL_LoadAudioFrames(KrAudioDevice *device, KrAudioSpec *spec, u8 *dst, u32 count, void *user); // todo: cleanup
+u32 PL_LoadAudioFrames(KrAudioSpec *spec, u8 *dst, u32 count, void *user); // todo: cleanup
 
 static void PL_UpdateAudio() {
 	BYTE *data = nullptr;
@@ -515,7 +526,7 @@ static void PL_UpdateAudio() {
 	if (PL_GetAudioBuffer(&data, &frames)) {
 		// todo: call update things
 
-		u32 written = PL_LoadAudioFrames(g_AudioOut.DesiredAudioDevice, &g_AudioOut.Spec, data, frames, nullptr);
+		u32 written = PL_LoadAudioFrames(&g_AudioOut.Spec, data, frames, nullptr);
 
 		PL_ReleaseAudioBuffer(written, frames);
 	}
@@ -556,11 +567,6 @@ static DWORD WINAPI PL_AudioThread(LPVOID param) {
 	DWORD task_index;
 	HANDLE avrt = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index);
 
-	if (!g_AudioOut.DesiredAudioDevice) {
-		g_AudioOut.DesiredAudioDevice   = &g_AudioDeviceListHead;
-		g_AudioOut.EffectiveAudioDevice = g_AudioOut.DesiredAudioDevice;
-	}
-
 	if (PL_SetupAudioRenderDevice(g_AudioOut.DesiredAudioDevice)) {
 		// todo: event render device gained
 	}
@@ -579,7 +585,16 @@ static DWORD WINAPI PL_AudioThread(LPVOID param) {
 			PL_PauseAudio();
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Reset) {
 			PL_ResetAudio();
-		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Restart) {
+		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_DeviceLost) {
+			PL_ReleaseAudioRenderDevice();
+			if (PL_SetupAudioRenderDevice(nullptr)) {
+				// todo: swapping event
+				PL_UpdateAudio();
+				if (g_AudioOut.DeviceIsResumed) {
+					PL_ResumeAudio();
+				}
+			}
+		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_DeviceRestart) {
 			PL_ReleaseAudioRenderDevice();
 			if (PL_SetupAudioRenderDevice(g_AudioOut.DesiredAudioDevice)) {
 				// todo: swapping event
@@ -811,12 +826,22 @@ void KrResetAudio() {
 	ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_Reset], 1, 0);
 }
 
+bool KrSetAudioRenderingDevice(KrAudioDevice *device) {
+	if (device && device->Flow == KrAudioDeviceFlow_Capture)
+		return false;
+	KrAudioDevice *prev = InterlockedExchangePointer(&g_AudioOut.DesiredAudioDevice, device);
+	if (prev != device) {
+		ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceRestart], 1, 0);
+	}
+	return true;
+}
+
 void ListAudioDevices() {
 	KrAudioDeviceIter iter;
 	PL_AudioDevice *device;
 
 	printf("Render devices\n");
-	printf("Current: %s\n", g_AudioOut.EffectiveAudioDevice->Name);
+	printf("Current: %s\n", g_AudioOut.EffectiveAudioDevice ? g_AudioOut.EffectiveAudioDevice->Name : "Default");
 	KrAudioDeviceIterInit(&iter, KrAudioDeviceIter_RenderFlow);
 	while (device = KrAudioDeviceIterNext(&iter)) {
 		printf(" [%c] %s\n", device->Active ? '*' : ' ', device->Name);
@@ -827,6 +852,28 @@ void ListAudioDevices() {
 	while (device = KrAudioDeviceIterNext(&iter)) {
 		printf(" [%c] %s\n", device->Active ? '*' : ' ', device->Name);
 	}
+}
+
+void SetAudioOutDevice(int i) {
+	if (i == -1) {
+		KrSetAudioRenderingDevice(nullptr);
+		printf("Set output device: Default\n");
+		return;
+	}
+
+	KrAudioDeviceIter iter;
+	PL_AudioDevice *device;
+	KrAudioDeviceIterInit(&iter, KrAudioDeviceIter_RenderFlow);
+	int index = 0;
+	while (device = KrAudioDeviceIterNext(&iter)) {
+		if (index == i) {
+			KrSetAudioRenderingDevice(device);
+			printf("Set output device: %s\n", device->Name);
+			return;
+		}
+		index += 1;
+	}
+	printf("Invalid device index: %d\n", i);
 }
 
 //int WINAPI wWinMain(HINSTANCE instance, HINSTANCE prev_instance, PWSTR args, int show) {
@@ -847,7 +894,7 @@ static uint CurrentSample = 0;
 static i16 *CurrentStream = 0;
 static real Volume        = 0.5f;
 
-u32 PL_LoadAudioFrames(KrAudioDevice *device, KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
+u32 PL_LoadAudioFrames(KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
 
 	umem size = count * spec->Channels;
@@ -963,29 +1010,47 @@ int main(int argc, char *argv[]) {
 
 	char input[1024];
 
+	char *args[5];
+
 	for (;;) {
 		printf("> ");
 		if (!gets_s(input, sizeof(input)))
 			continue;
 
-		if (strcmp(input, "resume") == 0) {
+		char *command = strtok(input, " ");
+		if (!command)
+			continue;
+
+		int count = 0;
+		for (int index = 0; index < ArrayCount(args); ++index, ++count) {
+			args[count] = strtok(nullptr, " ");
+			if (args[count] == nullptr)
+				break;
+		}
+
+		if (strcmp(command, "resume") == 0) {
 			KrResumeAudio();
-		} else if (strcmp(input, "pause") == 0) {
+		} else if (strcmp(command, "pause") == 0) {
 			KrPauseAudio();
-		} else if (strcmp(input, "stop") == 0) {
+		} else if (strcmp(command, "stop") == 0) {
 			KrResetAudio();
 			CurrentSample = 0;
-		} else if (strcmp(input, "reset") == 0) {
+		} else if (strcmp(command, "reset") == 0) {
 			KrResetAudio();
 			CurrentSample = 0;
 			KrUpdateAudio();
 			KrResumeAudio();
-		} else if (strcmp(input, "quit") == 0) {
+		} else if (strcmp(command, "quit") == 0) {
 			break;
-		} else if (strcmp(input, "list") == 0) {
+		} else if (strcmp(command, "list") == 0) {
 			ListAudioDevices();
+		} else if (strcmp(command, "set") == 0 && count == 1) {
+			int i = atoi(args[0]);
+			if (strcmp(args[0], "default") == 0)
+				i = -1;
+			SetAudioOutDevice(i);
 		} else {
-			printf("invalid command\n");
+			printf("invalid command: %s\n", command);
 		}
 	}
 
