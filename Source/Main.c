@@ -40,6 +40,7 @@ DEFINE_GUID(KR_IID_IMMNotificationClient, 0x7991eec9, 0x7e89, 0x4d85, 0x83, 0x90
 DEFINE_GUID(KR_IID_IMMEndpoint, 0x1BE09788, 0x6894, 0x4089, 0x85, 0x86, 0x9A, 0x2A, 0x6C, 0x26, 0x5A, 0xC5);
 DEFINE_GUID(KR_IID_IAudioClient, 0x1cb9ad4c, 0xdbfa, 0x4c32, 0xb1, 0x78, 0xc2, 0xf5, 0x68, 0xa7, 0x03, 0xb2);
 DEFINE_GUID(KR_IID_IAudioRenderClient, 0xf294acfc, 0x3146, 0x4483, 0xa7, 0xbf, 0xad, 0xdc, 0xa7, 0xc2, 0x60, 0xe2);
+
 DEFINE_GUID(KR_KSDATAFORMAT_SUBTYPE_PCM, 0x00000001, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71);
 DEFINE_GUID(KR_KSDATAFORMAT_SUBTYPE_IEEE_FLOAT, 0x00000003, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71);
 DEFINE_GUID(KR_KSDATAFORMAT_SUBTYPE_WAVEFORMATEX, 0x00000000L, 0x0000, 0x0010, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71);
@@ -107,6 +108,7 @@ typedef enum PL_AudioEvent {
 	PL_AudioEvent_Reset,
 	PL_AudioEvent_DeviceLost,
 	PL_AudioEvent_DeviceRestart,
+	PL_AudioEvent_Exit,
 	PL_AudioEvent_EnumMax
 } PL_AudioEvent;
 
@@ -412,13 +414,13 @@ static bool PL_SetAudioSpec(WAVEFORMATEX *wave_format) {
 }
 
 static void PL_ReleaseAudioRenderDevice() {
-	if (g_AudioOut.Client) {
-		g_AudioOut.Client->lpVtbl->Release(g_AudioOut.Client);
-		g_AudioOut.Client = nullptr;
-	}
 	if (g_AudioOut.RenderClient) {
 		g_AudioOut.RenderClient->lpVtbl->Release(g_AudioOut.RenderClient);
 		g_AudioOut.RenderClient = nullptr;
+	}
+	if (g_AudioOut.Client) {
+		g_AudioOut.Client->lpVtbl->Release(g_AudioOut.Client);
+		g_AudioOut.Client = nullptr;
 	}
 	g_AudioOut.MaxFrames = 0;
 
@@ -506,10 +508,7 @@ failed:
 }
 
 static void PL_ReleaseAudioBuffer(u32 written, u32 frames) {
-	DWORD flags = 0;
-	if (written < frames)
-		flags |= AUDCLNT_BUFFERFLAGS_SILENT;
-
+	DWORD flags = written < frames ? AUDCLNT_BUFFERFLAGS_SILENT : 0;
 	HRESULT hr = g_AudioOut.RenderClient->lpVtbl->ReleaseBuffer(g_AudioOut.RenderClient, written, flags);
 	if (SUCCEEDED(hr))
 		return;
@@ -524,10 +523,7 @@ static void PL_UpdateAudio() {
 	BYTE *data = nullptr;
 	u32 frames = 0;
 	if (PL_GetAudioBuffer(&data, &frames)) {
-		// todo: call update things
-
 		u32 written = PL_LoadAudioFrames(&g_AudioOut.Spec, data, frames, nullptr);
-
 		PL_ReleaseAudioBuffer(written, frames);
 	}
 }
@@ -603,10 +599,14 @@ static DWORD WINAPI PL_AudioThread(LPVOID param) {
 					PL_ResumeAudio();
 				}
 			}
+		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Exit) {
+			break;
 		}
 
 		// todo: check for default device changes, device lost and device gained and events
 	}
+
+	PL_ReleaseAudioRenderDevice();
 
 	AvRevertMmThreadCharacteristics(&avrt);
 
@@ -619,12 +619,14 @@ static DWORD WINAPI PL_AudioThread(LPVOID param) {
 //
 
 static void ShutdownAudio() {
-	if (g_AudioOut.Thread)
-		TerminateThread(g_AudioOut.Thread, 0);
+	if (g_AudioOut.Thread) {
+		ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_Exit], 1, 0);
 
-	g_AudioOut.DeviceIsResumed = 0;
-	g_AudioOut.DeviceIsLost    = 0;
-	PL_ReleaseAudioRenderDevice();
+		WaitForSingleObject(g_AudioOut.Thread, INFINITE);
+		CloseHandle(g_AudioOut.Thread);
+	}
+
+	memset(&g_AudioOut, 0, sizeof(g_AudioOut));
 
 	if (g_AudioDeviceEnumerator) {
 		g_AudioDeviceEnumerator->lpVtbl->UnregisterEndpointNotificationCallback(g_AudioDeviceEnumerator, &g_NotificationClient);
@@ -991,6 +993,36 @@ i16 *Serialize(Audio_Stream *audio, uint *count) {
 	return (i16 *)(ptr + 1);
 }
 
+typedef struct Time {
+	u32 secs;
+	u32 mins;
+} Time;
+
+Time GetTime(u32 prog, u32 freq) {
+	u32 secs = prog / freq;
+	u32 mins = secs / 60;
+	u32 rems = secs % 60;
+	return (Time){.secs=rems, .mins=mins};
+}
+
+static DWORD WINAPI RenderTime(LPVOID param) {
+	Audio_Stream *audio = (Audio_Stream *)param;
+
+	while (1) {
+		Time pos = GetTime(CurrentSample / 2, audio->fmt.sample_rate);
+		Time cap = GetTime(MaxSample / 2, audio->fmt.sample_rate);
+
+		char buffer[128];
+		int len = snprintf(buffer, sizeof(buffer), "%02u:%02u/%02u:%02u", pos.mins, pos.secs, cap.mins, cap.secs);
+
+		DWORD written = 0;
+		WriteConsoleOutputCharacterA(GetStdHandle(STD_OUTPUT_HANDLE), buffer, len, (COORD){.X=5,.Y=0}, &written);
+		Sleep(200);
+	}
+
+	return 0;
+}
+
 int main(int argc, char *argv[]) {
 	if (argc <= 1){
 		Usage(argv[0]);
@@ -1008,12 +1040,18 @@ int main(int argc, char *argv[]) {
 	KrUpdateAudio();
 	KrResumeAudio();
 
+
+	CreateThread(nullptr, 0, RenderTime, audio, 0, 0);
+
+
 	char input[1024];
 
 	char *args[5];
 
 	for (;;) {
-		printf("> ");
+		SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), (COORD){.X = 0, .Y = 1});
+		printf("                                                                                                \r");
+		printf("  > ");
 		if (!gets_s(input, sizeof(input)))
 			continue;
 
