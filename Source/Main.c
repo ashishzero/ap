@@ -842,40 +842,31 @@ void ListAudioDevices() {
 	KrAudioDeviceIter iter;
 	PL_AudioDevice *device;
 
-	printf("Render devices\n");
-	printf("Current: %s\n", g_AudioOut.EffectiveAudioDevice ? g_AudioOut.EffectiveAudioDevice->Name : "Default");
+	printf(" [%c] Default\n", g_AudioOut.EffectiveAudioDevice ? ' ' : '*');
+
 	KrAudioDeviceIterInit(&iter, KrAudioDeviceIter_RenderFlow);
 	while (device = KrAudioDeviceIterNext(&iter)) {
-		printf(" [%c] %s\n", device->Active ? '*' : ' ', device->Name);
-	}
-
-	printf("Capture devices\n");
-	KrAudioDeviceIterInit(&iter, KrAudioDeviceIter_CaptureFlow);
-	while (device = KrAudioDeviceIterNext(&iter)) {
-		printf(" [%c] %s\n", device->Active ? '*' : ' ', device->Name);
+		printf(" [%c] %s\n", device == g_AudioOut.EffectiveAudioDevice ? '*' : ' ', device->Name);
 	}
 }
 
 void SetAudioOutDevice(int i) {
-	if (i == -1) {
+	if (i == 0) {
 		KrSetAudioRenderingDevice(nullptr);
-		printf("Set output device: Default\n");
 		return;
 	}
 
 	KrAudioDeviceIter iter;
 	PL_AudioDevice *device;
 	KrAudioDeviceIterInit(&iter, KrAudioDeviceIter_RenderFlow);
-	int index = 0;
+	int index = 1;
 	while (device = KrAudioDeviceIterNext(&iter)) {
 		if (index == i) {
 			KrSetAudioRenderingDevice(device);
-			printf("Set output device: %s\n", device->Name);
 			return;
 		}
 		index += 1;
 	}
-	printf("Invalid device index: %d\n", i);
 }
 
 //int WINAPI wWinMain(HINSTANCE instance, HINSTANCE prev_instance, PWSTR args, int show) {
@@ -1049,8 +1040,12 @@ int main(int argc, char *argv[]) {
 	char *args[5];
 
 	for (;;) {
-		SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), (COORD){.X = 0, .Y = 1});
-		printf("                                                                                                \r");
+		system("cls");
+
+		SetConsoleCursorPosition(GetStdHandle(STD_OUTPUT_HANDLE), (COORD){.X = 0, .Y = 3});
+
+		ListAudioDevices();
+
 		printf("  > ");
 		if (!gets_s(input, sizeof(input)))
 			continue;
@@ -1080,13 +1075,9 @@ int main(int argc, char *argv[]) {
 			KrResumeAudio();
 		} else if (strcmp(command, "quit") == 0) {
 			break;
-		} else if (strcmp(command, "list") == 0) {
-			ListAudioDevices();
 		} else if (strcmp(command, "set") == 0 && count == 1) {
-			int i = atoi(args[0]);
-			if (strcmp(args[0], "default") == 0)
-				i = -1;
-			SetAudioOutDevice(i);
+			SetAudioOutDevice(atoi(args[0]));
+			Sleep(100);
 		} else {
 			printf("invalid command: %s\n", command);
 		}
