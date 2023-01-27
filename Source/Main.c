@@ -882,10 +882,13 @@ void SetAudioOutDevice(int i) {
 //	printf("thing\n");
 //}
 
-static uint MaxSample     = 0;
-static uint CurrentSample = 0;
+#include <math.h>
+
+static uint MaxFrame      = 0;
+static float CurrentFrame = 0;
 static i16 *CurrentStream = 0;
-static real Volume        = 0.5f;
+static real Volume        = 1;
+static float SampleSpeed  = 1;
 
 u32 PL_LoadAudioFrames(KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
@@ -894,16 +897,27 @@ u32 PL_LoadAudioFrames(KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 
 	r32 *samples  = (r32 *)dst;
 	for (uint i = 0; i < size; i += spec->Channels) {
-		float l = (float)CurrentStream[CurrentSample + 0] / 32767.0f;
-		float r = (float)CurrentStream[CurrentSample + 1] / 32767.0f;
+		uint x = (uint)CurrentFrame;
+		uint y = x + 1;
+
+		float lx = (float)CurrentStream[x * spec->Channels + 0] / 32767.0f;
+		float ly = (float)CurrentStream[y * spec->Channels + 0] / 32767.0f;
+		float rx = (float)CurrentStream[x * spec->Channels + 1] / 32767.0f;
+		float ry = (float)CurrentStream[y * spec->Channels + 1] / 32767.0f;
+
+		float t = CurrentFrame - x;
+
+		float l = (1.0f - t) * lx + t * ly;
+		float r = (1.0f - t) * rx + t * ry;
 
 		samples[i + 0] = Volume * l;
 		samples[i + 1] = Volume * r;
 
-		CurrentSample += 2;
+		CurrentFrame += SampleSpeed;
 
-		if (CurrentSample >= MaxSample)
-			CurrentSample = 0;
+		if (CurrentFrame >= (float)MaxFrame) {
+			CurrentFrame = fmodf(CurrentFrame, (float)MaxFrame);
+		}
 	}
 
 	return count;
@@ -980,6 +994,7 @@ i16 *Serialize(Audio_Stream *audio, uint *count) {
 	}
 
 	*count = ptr->size / sizeof(i16);
+	*count /= audio->fmt.channels_count;
 
 	return (i16 *)(ptr + 1);
 }
@@ -1000,8 +1015,8 @@ static DWORD WINAPI RenderTime(LPVOID param) {
 	Audio_Stream *audio = (Audio_Stream *)param;
 
 	while (1) {
-		Time pos = GetTime(CurrentSample / 2, audio->fmt.sample_rate);
-		Time cap = GetTime(MaxSample / 2, audio->fmt.sample_rate);
+		Time pos = GetTime(lroundf(CurrentFrame), audio->fmt.sample_rate);
+		Time cap = GetTime(MaxFrame, audio->fmt.sample_rate);
 
 		char buffer[128];
 		int len = snprintf(buffer, sizeof(buffer), "%02u:%02u/%02u:%02u", pos.mins, pos.secs, cap.mins, cap.secs);
@@ -1024,7 +1039,7 @@ int main(int argc, char *argv[]) {
 	string buff = ReadEntireFile(path);
 	Audio_Stream *audio = (Audio_Stream *)buff.data;
 
-	CurrentStream = Serialize(audio, &MaxSample);
+	CurrentStream = Serialize(audio, &MaxFrame);
 
 	Initialize();
 
@@ -1067,12 +1082,27 @@ int main(int argc, char *argv[]) {
 			KrPauseAudio();
 		} else if (strcmp(command, "stop") == 0) {
 			KrResetAudio();
-			CurrentSample = 0;
+			CurrentFrame = 0;
 		} else if (strcmp(command, "reset") == 0) {
 			KrResetAudio();
-			CurrentSample = 0;
+			CurrentFrame = 0;
 			KrUpdateAudio();
 			KrResumeAudio();
+		} else if (strcmp(command, "f") == 0) {
+			float next = CurrentFrame + 5 * audio->fmt.sample_rate;
+			if (next > MaxFrame)
+				next = (float)MaxFrame;
+			CurrentFrame = next;
+		} else if (strcmp(command, "b") == 0) {
+			float next = CurrentFrame - 5 * audio->fmt.sample_rate;
+			if (next < 0)
+				next = 0;
+			CurrentFrame = next;
+		} else if (strcmp(command, "x") == 0 && count == 1) {
+			float val;
+			if (sscanf(args[0], "%f", &val) == 1 && val > 0.0f) {
+				SampleSpeed = val;
+			}
 		} else if (strcmp(command, "quit") == 0) {
 			break;
 		} else if (strcmp(command, "set") == 0 && count == 1) {
