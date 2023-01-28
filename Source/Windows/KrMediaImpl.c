@@ -91,7 +91,7 @@ inproc void PL_PrepareWindow() {
 		.style         = CS_HREDRAW | CS_VREDRAW,
 		.lpfnWndProc   = PL_HandleWindowsEvent,
 		.hInstance     = instance,
-		.hIcon         = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(101), IMAGE_ICON, 0, 0, 0),
+		.hIcon         = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(102), IMAGE_ICON, 0, 0, LR_SHARED),
 		.lpszClassName = L"PL Window"
 	};
 
