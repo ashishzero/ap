@@ -18,13 +18,30 @@
     <ClCompile Include="Source\Main.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Windows\KrMediaImpl.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\KrMedia.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Source\KrPlatform.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\KrModule.h">
+    <ClInclude Include="Source\KrMedia.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="Source\KrMediaImpl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="resource.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="KrResource.rc">
+      <Filter>Resource Files</Filter>
+    </ResourceCompile>
   </ItemGroup>
 </Project>

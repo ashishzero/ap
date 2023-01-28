@@ -137,13 +137,10 @@
 #endif
 #endif
 
-#if defined(COMPILER_GCC)
-#define inproc static inline
-#else
-#define inproc inline
-#endif
+#define inproc static
+#define proc 
 
-#if !defined(BUILD_DEBUG) && !defined(BUILD_DEVELOPER) && !defined(BUILD_RELEASE) && !defined(BUILD_TEST)
+#if !defined(BUILD_DEBUG) && !defined(BUILD_DEVELOPER) && !defined(BUILD_RELEASE)
 #if defined(_DEBUG) || defined(DEBUG)
 #define BUILD_DEBUG
 #elif defined(NDEBUG)
@@ -153,23 +150,23 @@
 #endif
 #endif
 
-#if defined(BUILD_DEBUG) || defined(BUILD_DEVELOPER) || defined(BUILD_TEST)
+#if defined(BUILD_DEBUG) || defined(BUILD_DEVELOPER)
 #define DebugTriggerbreakpoint TriggerBreakpoint
 #else
 #define DebugTriggerbreakpoint()
 #endif
 
 #ifdef __GNUC__
-_Noreturn inproc __attribute__((always_inline)) void Unreachable() { DebugTriggerbreakpoint(); __builtin_unreachable(); }
+_Noreturn static inline __attribute__((always_inline)) void Unreachable() { DebugTriggerbreakpoint(); __builtin_unreachable(); }
 #elif defined(_MSC_VER)
 _Noreturn __forceinline void Unreachable(void) { DebugTriggerbreakpoint(); __assume(false); }
-#else // ???
-inproc void Unreachable(void) { TriggerBreakpoint(); }
+#else
+static inline void Unreachable(void) { TriggerBreakpoint(); }
 #endif
 
 #define NoDefaultCase() default: Unreachable(); break
 
-_Noreturn inproc void Unimplemented(void) { TriggerBreakpoint(); Unreachable(); }
+_Noreturn static inline void Unimplemented(void) { TriggerBreakpoint(); Unreachable(); }
 
 //
 //
@@ -222,7 +219,7 @@ typedef ptrdiff_t imem;
 //
 //
 
-#if defined(BUILD_DEBUG) || defined(BUILD_DEVELOPER) || defined(BUILD_TEST)
+#if defined(BUILD_DEBUG) || defined(BUILD_DEVELOPER)
 #define Assert(x)                                                             \
     do                                                                        \
     {                                                                         \
@@ -237,24 +234,3 @@ typedef ptrdiff_t imem;
         0;        \
     } while (0)
 #endif
-
-//
-//
-//
-
-#define String(x) (string){ sizeof(x)-1, x }
-
-typedef struct string {
-	imem  count;
-	char *data;
-} string;
-
-typedef struct string16 {
-	imem      count;
-	char16_t *data;
-} string16;
-
-typedef struct string32 {
-	imem      count;
-    char32_t *data;
-} string32;
