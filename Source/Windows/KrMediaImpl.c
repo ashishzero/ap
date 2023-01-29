@@ -456,6 +456,7 @@ typedef struct PL_AudioDevice {
 	char *                 Name;
 	KrAudioDeviceFlow      Flow;
 	volatile LONG          IsActive;
+	volatile LONG          Generation;
 	LPWSTR                 Id;
 	PL_KrDeviceName        Names[2];
 } PL_AudioDevice;
@@ -465,7 +466,7 @@ typedef enum PL_AudioEvent {
 	PL_AudioEvent_Resume,
 	PL_AudioEvent_Pause,
 	PL_AudioEvent_Reset,
-	PL_AudioEvent_DeviceLoadDefault,
+	PL_AudioEvent_DeviceLostLoadDefault,
 	PL_AudioEvent_LoadDesiredDevice,
 	PL_AudioEvent_Exit,
 	PL_AudioEvent_EnumMax
@@ -489,7 +490,6 @@ static IMMNotificationClient g_NotificationClient = {
 static IMMDeviceEnumerator * g_AudioDeviceEnumerator;
 static PL_AudioDevice        g_AudioDeviceListHead = { .Name = "Default", .Flow = KrAudioDeviceFlow_All };
 static volatile LONG         g_AudioDeviceListLock;
-//static PL_AudioDevice      * g_AudioDeviceRenderDefault;
 
 static struct {
 	IAudioClient         *Client;
@@ -501,7 +501,7 @@ static struct {
 	volatile LONG         DeviceIsResumed;
 	PL_AudioDevice *      DesiredDevice;
 	PL_AudioDevice *      EffectiveDevice;
-	volatile LONG         DefaultGeneration;
+	LONG                  EffectiveGeneration;
 	HANDLE                Thread;
 } g_AudioOut;
 
@@ -614,6 +614,7 @@ inproc PL_AudioDevice *PL_UpdateAudioDeviceList(IMMDevice *immdevice) {
 	device->Names[0]   = PL_IMMDeviceName(immdevice);
 	device->Flow       = PL_IMMDeviceFlow(immdevice);
 	device->IsActive   = PL_IMMDeviceIsActive(immdevice);
+	device->Generation = 1;
 	device->Name       = device->Names[0].Buffer;
 
 	// Insert in alphabetical order
@@ -629,22 +630,25 @@ inproc PL_AudioDevice *PL_UpdateAudioDeviceList(IMMDevice *immdevice) {
 	return device;
 }
 
-//inproc PL_AudioDevice *PL_UpdateDefaultAudioRenderDevice(LPCWSTR id) {
-//	if (id) {
-//		PL_AudioDevice *device = PL_FindAudioDeviceFromId(id);
-//		if (!device) {
-//			IMMDevice *immdevice = PL_IMMDeviceFromId(id);
-//			if (!immdevice) return g_AudioDeviceRenderDefault;
-//			device = PL_UpdateAudioDeviceList(immdevice);
-//			immdevice->lpVtbl->Release(immdevice);
-//			if (!device) return g_AudioDeviceRenderDefault;
-//		}
-//		Assert(device->Flow == KrAudioDeviceFlow_Render);
-//		return InterlockedExchangePointer(&g_AudioDeviceRenderDefault, device);
-//	} else {
-//		return InterlockedExchangePointer(&g_AudioDeviceRenderDefault, nullptr);
-//	}
-//}
+inproc PL_AudioDevice *PL_GetDefaultAudioDevice(KrAudioDeviceFlow flow) {
+	PL_AudioDevice *device = nullptr;
+
+	IMMDevice *immdevice = PL_GetDefaultIMMDevice(flow == KrAudioDeviceFlow_Render ? eRender : eConsole);
+	if (immdevice ) {
+		LPWSTR id = PL_IMMDeviceId(immdevice);
+		if (id) {
+			device = PL_FindAudioDeviceFromId(id);
+			if (!device) {
+				// This shouldn't really happen but oh well
+				device = PL_UpdateAudioDeviceList(immdevice);
+			}
+			CoTaskMemFree(id);
+		}
+		immdevice ->lpVtbl->Release(immdevice );
+	}
+
+	return device;
+}
 
 inproc HRESULT STDMETHODCALLTYPE PL_QueryInterface(IMMNotificationClient *This, REFIID riid, void **ppv_object) {
 	if (memcmp(&PL_IID_IUnknown, riid, sizeof(GUID)) == 0) {
@@ -672,6 +676,7 @@ inproc HRESULT STDMETHODCALLTYPE PL_OnDeviceStateChanged(IMMNotificationClient *
 
 	if (device) {
 		prev = InterlockedExchange(&device->IsActive, active);
+		InterlockedIncrement(&device->Generation);
 	} else {
 		// New device added
 		IMMDevice *immdevice = PL_IMMDeviceFromId(deviceid);
@@ -704,12 +709,12 @@ inproc HRESULT STDMETHODCALLTYPE PL_OnDeviceStateChanged(IMMNotificationClient *
 			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_LoadDesiredDevice], 1, 0);
 		} else if (!effective) {
 			printf("1. Device Lost\n");
-			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceLoadDefault], 1, 0);
+			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceLostLoadDefault], 1, 0);
 		}
 	} else {
 		if (device == effective) {
 			printf("2. Device Lost\n");
-			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceLoadDefault], 1, 0);
+			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceLostLoadDefault], 1, 0);
 		}
 	}
 
@@ -722,10 +727,6 @@ inproc HRESULT STDMETHODCALLTYPE PL_OnDeviceRemoved(IMMNotificationClient *This,
 
 inproc HRESULT STDMETHODCALLTYPE PL_OnDefaultDeviceChanged(IMMNotificationClient *This, EDataFlow flow, ERole role, LPCWSTR deviceid) {
 	if (flow == eRender && role == eMultimedia) {
-		//KrAtomicLock(&g_AudioDeviceListLock);
-		//PL_UpdateDefaultAudioRenderDevice(deviceid);
-		//KrAtomicUnlock(&g_AudioDeviceListLock);
-
 		if (!deviceid) {
 			// When there's no audio device in the system
 			PostMessageW(g_MainWindow, KR_WM_AUDIO_RENDER_DEVICE_LOST, 0, 0);
@@ -819,33 +820,15 @@ inproc void PL_ReleaseAudioRenderDevice() {
 	}
 	g_AudioOut.MaxFrames = 0;
 	InterlockedExchange(&g_AudioOut.DeviceIsLost, 1);
+	InterlockedExchange(&g_AudioOut.EffectiveGeneration, 0);
+	InterlockedExchangePointer(&g_AudioOut.EffectiveDevice, nullptr);
 }
 
-inproc bool PL_PrepareAudioRenderDevice(const PL_AudioDevice *device) {
+inproc bool PL_PrepareAudioRenderDevice(PL_AudioDevice *device) {
 	WAVEFORMATEX *wave_format = nullptr;
 
-	IMMDevice *immdevice = device ? PL_IMMDeviceFromId(device->Id) : PL_GetDefaultIMMDevice(eRender);
+	IMMDevice *immdevice = PL_IMMDeviceFromId(device->Id);
 	if (!immdevice) return false;
-
-	if (!device) {
-		LPWSTR id = PL_IMMDeviceId(immdevice);
-		if (id) {
-			device = PL_FindAudioDeviceFromId(id);
-			if (!device) {
-				// This should never be the case but oh well
-				KrAtomicLock(&g_AudioDeviceListLock);
-				device = PL_UpdateAudioDeviceList(immdevice);
-				KrAtomicUnlock(&g_AudioDeviceListLock);
-			}
-			CoTaskMemFree(id);
-		}
-	}
-
-	if (!device) {
-		// Error
-		immdevice->lpVtbl->Release(immdevice);
-		return false;
-	}
 
 	HRESULT hr = immdevice->lpVtbl->Activate(immdevice, &PL_IID_IAudioClient, CLSCTX_ALL, nullptr, &g_AudioOut.Client);
 	if (FAILED(hr)) goto failed;
@@ -879,6 +862,7 @@ inproc bool PL_PrepareAudioRenderDevice(const PL_AudioDevice *device) {
 
 	immdevice->lpVtbl->Release(immdevice);
 
+	g_AudioOut.EffectiveGeneration = InterlockedCompareExchange(&device->Generation, 0, 0);
 	InterlockedExchangePointer(&g_AudioOut.EffectiveDevice, (PL_AudioDevice *)device);
 	InterlockedExchange(&g_AudioOut.DeviceIsLost, 0);
 
@@ -999,11 +983,20 @@ inproc DWORD WINAPI PL_AudioThread(LPVOID param) {
 	HANDLE avrt = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index);
 
 	{
-		// Using nullptr instead of the cached device for default because
-		// the notification might not have updated the cache to the latest default device
-		// Same cases for the code blocks in the following loop
-		PL_AudioDevice *devices_priority_list[] = { g_AudioOut.DesiredDevice, nullptr };
-		PL_RestartAudioDevice(devices_priority_list, ArrayCount(devices_priority_list));
+		PL_AudioDevice *desired  =  g_AudioOut.DesiredDevice;
+		PL_AudioDevice *default_ = PL_GetDefaultAudioDevice(KrAudioDeviceFlow_Render);
+
+		int count = 0;
+		PL_AudioDevice *devices_priority_list[2];
+		if (desired)  devices_priority_list[count++] = desired;
+		if (default_) devices_priority_list[count++] = default_;
+
+		if (count) {
+			PL_RestartAudioDevice(devices_priority_list, count);
+		} else {
+			PostMessageW(g_MainWindow, KR_WM_AUDIO_RENDER_DEVICE_LOST, 0, 0);
+			g_AudioOut.DeviceIsLost = 1;
+		}
 	}
 
 	while (1) {
@@ -1020,14 +1013,33 @@ inproc DWORD WINAPI PL_AudioThread(LPVOID param) {
 			PL_PauseAudio();
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Reset) {
 			PL_ResetAudio();
-		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_DeviceLoadDefault) {
-			PL_AudioDevice *devices_priority_list[] = { nullptr };
-			PL_RestartAudioDevice(devices_priority_list, ArrayCount(devices_priority_list));
+		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_DeviceLostLoadDefault) {
+			PL_ReleaseAudioRenderDevice();
+			PL_AudioDevice *default_ = PL_GetDefaultAudioDevice(KrAudioDeviceFlow_Render);
+			if (default_) {
+				PL_RestartAudioDevice(&default_, 1);
+			}
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_LoadDesiredDevice) {
+			PL_AudioDevice *default_  = PL_GetDefaultAudioDevice(KrAudioDeviceFlow_Render);
 			PL_AudioDevice *desired   = InterlockedCompareExchangePointer(&g_AudioOut.DesiredDevice, nullptr, nullptr);
-			//PL_AudioDevice *effective = InterlockedCompareExchangePointer(&g_AudioOut.EffectiveDevice, nullptr, nullptr);
-			PL_AudioDevice *devices_priority_list[] = { desired, nullptr };
-			PL_RestartAudioDevice(devices_priority_list, ArrayCount(devices_priority_list));
+			PL_AudioDevice *effective = InterlockedCompareExchangePointer(&g_AudioOut.EffectiveDevice, nullptr, nullptr);
+
+			int count = 0;
+			PL_AudioDevice *devices_priority_list[2];
+			if (desired)  devices_priority_list[count++] = desired;
+			if (default_) devices_priority_list[count++] = default_;
+
+			if (count) {
+				if (desired) {
+					if (effective != desired || effective->Generation > g_AudioOut.EffectiveGeneration) {
+						PL_RestartAudioDevice(devices_priority_list, count);
+					}
+				} else {
+					if (effective != default_ || effective->Generation > g_AudioOut.EffectiveGeneration) {
+						PL_RestartAudioDevice(devices_priority_list, count);
+					}
+				}
+			}
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Exit) {
 			break;
 		}
@@ -1192,16 +1204,6 @@ inproc void PL_PrepareAudio() {
 		}
 
 		device_col->lpVtbl->Release(device_col);
-
-		//immdevice = PL_GetDefaultIMMDevice(eRender);
-		//if (immdevice) {
-		//	LPWSTR id = PL_IMMDeviceId(immdevice);
-		//	if (id) {
-		//		PL_UpdateDefaultAudioRenderDevice(id);
-		//		CoTaskMemFree(id);
-		//	}
-		//	immdevice->lpVtbl->Release(immdevice);
-		//}
 
 		KrAtomicUnlock(&g_AudioDeviceListLock);
 	}
