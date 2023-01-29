@@ -34,7 +34,7 @@ typedef void * KrAudioDeviceId;
 typedef enum KrAudioDeviceFlow {
 	KrAudioDeviceFlow_Render,
 	KrAudioDeviceFlow_Capture,
-	KrAudioDeviceFlow_EnumMax
+	KrAudioDeviceFlow_All
 } KrAudioDeviceFlow;
 
 typedef struct KrAudioDeviceInfo {
@@ -42,13 +42,21 @@ typedef struct KrAudioDeviceInfo {
 	const char *    Name;
 } KrAudioDeviceInfo;
 
-proc bool KrAudioIsPlaying();
-proc void KrAudioUpdate();
-proc void KrAudioResume();
-proc void KrAudioPause();
-proc void KrAudioReset();
-proc bool KrAudioSetRenderDevice(KrAudioDeviceId id);
-proc uint KrAudioGetDevices(KrAudioDeviceFlow flow, bool inactive, KrAudioDeviceInfo *output, uint cap);
+proc bool KrAudio_IsPlaying();
+proc void KrAudio_Update();
+proc void KrAudio_Resume();
+proc void KrAudio_Pause();
+proc void KrAudio_Reset();
+proc bool KrAudio_SetRenderDevice(KrAudioDeviceId id);
+proc uint KrAudio_GetDeviceList(KrAudioDeviceFlow flow, bool inactive, KrAudioDeviceInfo *output, uint cap);
+proc bool KrAudio_GetEffectiveDevice(KrAudioDeviceInfo *output);
+
+//
+// [Window]
+//
+
+bool KrWindow_IsFullscreen();
+void KrWindow_ToggleFullscreen();
 
 //
 // [Keyboard/Mouse]
@@ -85,25 +93,34 @@ typedef enum KrKey {
 //
 
 typedef enum KrEventKind {
-	KrEventKind_Startup,
-	KrEventKind_Quit,
-	KrEventKind_WindowCreated,
-	KrEventKind_WindowDestroyed,
-	KrEventKind_WindowActivated,
-	KrEventKind_WindowDeactivated,
-	KrEventKind_WindowResized,
+	KrEvent_Startup,
+	KrEvent_Quit,
+	KrEvent_WindowCreated,
+	KrEvent_WindowDestroyed,
+	KrEvent_WindowActivated,
+	KrEvent_WindowDeactivated,
+	KrEvent_WindowResized,
 
-	KrEventKind_MouseMoved,
-	KrEventKind_ButtonPressed,
-	KrEventKind_ButtonReleased,
-	KrEventKind_DoubleClicked,
-	KrEventKind_WheelMoved,
+	KrEvent_MouseMoved,
+	KrEvent_ButtonPressed,
+	KrEvent_ButtonReleased,
+	KrEvent_DoubleClicked,
+	KrEvent_WheelMoved,
 
-	KrEventKind_KeyPressed,
-	KrEventKind_KeyReleased,
-	KrEventKind_TextInput,
+	KrEvent_KeyPressed,
+	KrEvent_KeyReleased,
+	KrEvent_TextInput,
 
-	KrEventKind_EnumMax
+	KrEvent_AudioResumed,
+	KrEvent_AudioPaused,
+	KrEvent_AudioReset,
+	KrEvent_AudioRenderDeviceChanged,
+	KrEvent_AudioRenderDeviceLost,
+
+	KrEvent_AudioRenderDeviceActived,
+	KrEvent_AudioRenderDeviceDeactived,
+
+	KrEvent_EnumMax
 }  KrEventKind;
 
 typedef struct KrEvent {
@@ -128,10 +145,14 @@ typedef struct KrEvent {
 		struct {
 			u16 Code;
 		} Text;
+		struct {
+			KrAudioDeviceId Id;
+			const char *    Name;
+		} AudioDevice;
 	};
 } KrEvent;
 
-const char *KrEventNamed(KrEventKind kind);
+const char *KrEvent_GetName(KrEventKind kind);
 
 //
 //

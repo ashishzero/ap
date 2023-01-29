@@ -121,12 +121,50 @@ i16 *Serialize(Audio_Stream *audio, uint *count) {
 }
 
 void HandleEvent(const KrEvent *event, void *user) {
-	if (event->Kind == KrEventKind_Startup) {
-		KrAudioUpdate();
-		KrAudioResume();
+	//printf("Event: %s\n", KrEvent_GetName(event->Kind));
+
+	if (event->Kind == KrEvent_Startup) {
+		KrAudio_Update();
+		KrAudio_Resume();
 	}
 
-	printf("Event: %s\n", KrEventNamed(event->Kind));
+	if (event->Kind == KrEvent_AudioRenderDeviceChanged) {
+		printf("Render device changed: %s\n", event->AudioDevice.Name);
+	} else if (event->Kind == KrEvent_AudioRenderDeviceActived) {
+		printf("Activated render device: %s\n", event->AudioDevice.Name);
+	} else if (event->Kind == KrEvent_AudioRenderDeviceDeactived) {
+		printf("Deactivated render device: %s\n", event->AudioDevice.Name);
+	} else if (event->Kind == KrEvent_AudioRenderDeviceLost) {
+		printf("ERROR: No audio render device\n");
+	}
+
+	if (event->Kind == KrEvent_KeyPressed && !event->Key.Repeat) {
+		if (event->Key.Code == KrKey_Space) {
+			if (KrAudio_IsPlaying()) {
+				KrAudio_Pause();
+			} else {
+				KrAudio_Resume();
+			}
+		}
+		if (event->Key.Code == KrKey_F11) {
+			KrWindow_ToggleFullscreen();
+		}
+		
+		if (event->Key.Code >= KrKey_0 && event->Key.Code <= KrKey_9) {
+			uint i = event->Key.Code - KrKey_0;
+			if (!i) {
+				printf("Setting render device to default\n");
+				KrAudio_SetRenderDevice(0);
+			} else {
+				KrAudioDeviceInfo infos[10];
+				uint n = KrAudio_GetDeviceList(KrAudioDeviceFlow_Render, false, infos, ArrayCount(infos));
+				if (i - 1 < n) {
+					KrAudio_SetRenderDevice(infos[i - 1].Id);
+					printf("Setting render device to %s\n", infos[i - 1].Name);
+				}
+			}
+		}
+	}
 }
 
 void Update(void *data) {

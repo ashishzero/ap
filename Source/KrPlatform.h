@@ -166,7 +166,7 @@ static inline void Unreachable(void) { TriggerBreakpoint(); }
 
 #define NoDefaultCase() default: Unreachable(); break
 
-_Noreturn static inline void Unimplemented(void) { TriggerBreakpoint(); Unreachable(); }
+_Noreturn static inline void Unimplemented(void) { }
 
 //
 //

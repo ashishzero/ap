@@ -45,6 +45,14 @@ inproc int PL_UTF16ToUTF8(char *utf8_buff, int utf8_buff_len, const char16_t *ut
 // [Window]
 //
 
+#define KR_WM_AUDIO_RESUMED                   (WM_USER + 1)
+#define KR_WM_AUDIO_PAUSED                    (WM_USER + 2)
+#define KR_WM_AUDIO_RESET                     (WM_USER + 3)
+#define KR_WM_AUDIO_RENDER_DEVICE_CHANGED     (WM_USER + 4)
+#define KR_WM_AUDIO_RENDER_DEVICE_LOST        (WM_USER + 5)
+#define KR_WM_AUDIO_RENDER_DEVICE_ACTIVATED   (WM_USER + 6)
+#define KR_WM_AUDIO_RENDER_DEVICE_DEACTIVATED (WM_USER + 7)
+
 static WINDOWPLACEMENT g_MainWindowPlacement;
 static HWND            g_MainWindow;
 
@@ -117,9 +125,9 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			int low = LOWORD(wparam);
 
 			if (low == WA_ACTIVE || low == WA_CLICKACTIVE)
-				event.Kind = KrEventKind_WindowActivated;
+				event.Kind = KrEvent_WindowActivated;
 			else
-				event.Kind = KrEventKind_WindowDeactivated;
+				event.Kind = KrEvent_WindowDeactivated;
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
 
 			res = DefWindowProcW(wnd, msg, wparam, lparam);
@@ -129,13 +137,13 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 		{
 			res = DefWindowProcW(wnd, msg, wparam, lparam);
 
-			event.Kind = KrEventKind_WindowCreated;
+			event.Kind = KrEvent_WindowCreated;
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
 		} break;
 
 		case WM_DESTROY:
 		{
-			event.Kind = KrEventKind_WindowDestroyed;
+			event.Kind = KrEvent_WindowDestroyed;
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
 
 			res = DefWindowProcW(wnd, msg, wparam, lparam);
@@ -147,7 +155,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			int x = LOWORD(lparam);
 			int y = HIWORD(lparam);
 
-			event.Kind = KrEventKind_WindowResized;
+			event.Kind = KrEvent_WindowResized;
 			event.Window.Width  = x;
 			event.Window.Height = y;
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
@@ -157,7 +165,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			int x = GET_X_LPARAM(lparam);
 			int y = GET_Y_LPARAM(lparam);
 
-			event.Kind = KrEventKind_MouseMoved;
+			event.Kind = KrEvent_MouseMoved;
 			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
 		} break;
@@ -167,7 +175,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			int x = GET_X_LPARAM(lparam);
 			int y = GET_Y_LPARAM(lparam);
 
-			event.Kind = msg == WM_LBUTTONDOWN ? KrEventKind_ButtonPressed : KrEventKind_ButtonReleased;
+			event.Kind = msg == WM_LBUTTONDOWN ? KrEvent_ButtonPressed : KrEvent_ButtonReleased;
 			event.Mouse.Button = KrButton_Left;
 			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
@@ -178,7 +186,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			int x = GET_X_LPARAM(lparam);
 			int y = GET_Y_LPARAM(lparam);
 
-			event.Kind = msg == WM_LBUTTONDOWN ? KrEventKind_ButtonPressed : KrEventKind_ButtonReleased;
+			event.Kind = msg == WM_LBUTTONDOWN ? KrEvent_ButtonPressed : KrEvent_ButtonReleased;
 			event.Mouse.Button = KrButton_Right;
 			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
@@ -189,7 +197,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			int x = GET_X_LPARAM(lparam);
 			int y = GET_Y_LPARAM(lparam);
 
-			event.Kind = msg == WM_LBUTTONDOWN ? KrEventKind_ButtonPressed : KrEventKind_ButtonReleased;
+			event.Kind = msg == WM_LBUTTONDOWN ? KrEvent_ButtonPressed : KrEvent_ButtonReleased;
 			event.Mouse.Button = KrButton_Middle;
 			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
@@ -199,7 +207,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			int x = GET_X_LPARAM(lparam);
 			int y = GET_Y_LPARAM(lparam);
 
-			event.Kind = KrEventKind_DoubleClicked;
+			event.Kind = KrEvent_DoubleClicked;
 			event.Mouse.Button = KrButton_Left;
 			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
@@ -209,7 +217,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			int x = GET_X_LPARAM(lparam);
 			int y = GET_Y_LPARAM(lparam);
 
-			event.Kind = KrEventKind_DoubleClicked;
+			event.Kind = KrEvent_DoubleClicked;
 			event.Mouse.Button = KrButton_Right;
 			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
@@ -219,7 +227,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			int x = GET_X_LPARAM(lparam);
 			int y = GET_Y_LPARAM(lparam);
 
-			event.Kind = KrEventKind_DoubleClicked;
+			event.Kind = KrEvent_DoubleClicked;
 			event.Mouse.Button = KrButton_Middle;
 			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
@@ -229,7 +237,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			int x = GET_X_LPARAM(lparam);
 			int y = GET_Y_LPARAM(lparam);
 
-			event.Kind = KrEventKind_WheelMoved;
+			event.Kind = KrEvent_WheelMoved;
 			event.Wheel.Vert = (float)GET_WHEEL_DELTA_WPARAM(wparam) / (float)WHEEL_DELTA;
 			event.Wheel.Horz = 0.0f;
 			PL_NormalizeCursorPosition(wnd, x, y, &event.Wheel.X, &event.Wheel.Y);
@@ -240,7 +248,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			int x = GET_X_LPARAM(lparam);
 			int y = GET_Y_LPARAM(lparam);
 
-			event.Kind = KrEventKind_WheelMoved;
+			event.Kind = KrEvent_WheelMoved;
 			event.Wheel.Vert = 0.0f;
 			event.Wheel.Horz = (float)GET_WHEEL_DELTA_WPARAM(wparam) / (float)WHEEL_DELTA;
 			PL_NormalizeCursorPosition(wnd, x, y, &event.Wheel.X, &event.Wheel.Y);
@@ -250,7 +258,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 		case WM_KEYUP:
 		case WM_KEYDOWN: {
 			if (wparam < ArrayCount(VirtualKeyMap)) {
-				event.Kind = msg == WM_KEYDOWN ? KrEventKind_KeyPressed : KrEventKind_KeyReleased;
+				event.Kind = msg == WM_KEYDOWN ? KrEvent_KeyPressed : KrEvent_KeyReleased;
 				event.Key.Code   = VirtualKeyMap[wparam];
 				event.Key.Repeat = HIWORD(lparam) & KF_REPEAT;
 				g_UserContext.OnEvent(&event, g_UserContext.Data);
@@ -260,7 +268,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 		case WM_SYSKEYUP:
 		case WM_SYSKEYDOWN: {
 			if (wparam == VK_F10) {
-				event.Kind = msg == WM_KEYDOWN ? KrEventKind_KeyPressed : KrEventKind_KeyReleased;
+				event.Kind = msg == WM_KEYDOWN ? KrEvent_KeyPressed : KrEvent_KeyReleased;
 				event.Key.Code = KrKey_F10;
 				event.Key.Repeat = HIWORD(lparam) & KF_REPEAT;
 				g_UserContext.OnEvent(&event, g_UserContext.Data);
@@ -268,7 +276,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 		} break;
 
 		case WM_CHAR: {
-			event.Kind = KrEventKind_TextInput;
+			event.Kind = KrEvent_TextInput;
 			event.Text.Code = (u16)wparam;
 			g_UserContext.OnEvent(&event, g_UserContext.Data);
 		} break;
@@ -283,6 +291,54 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			SetWindowPos(wnd, 0, left, top, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
 		} break;
 
+		case KR_WM_AUDIO_RESUMED:
+		{
+			event.Kind = KrEvent_AudioResumed;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case KR_WM_AUDIO_PAUSED:
+		{
+			event.Kind = KrEvent_AudioPaused;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case KR_WM_AUDIO_RESET:
+		{
+			event.Kind = KrEvent_AudioReset;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case KR_WM_AUDIO_RENDER_DEVICE_CHANGED:
+		{
+			event.Kind = KrEvent_AudioRenderDeviceChanged;
+			event.AudioDevice.Id   = (void *)wparam;
+			event.AudioDevice.Name = (char *)lparam;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case KR_WM_AUDIO_RENDER_DEVICE_LOST:
+		{
+			event.Kind = KrEvent_AudioRenderDeviceLost;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case KR_WM_AUDIO_RENDER_DEVICE_ACTIVATED:
+		{
+			event.Kind = KrEvent_AudioRenderDeviceActived;
+			event.AudioDevice.Id   = (void *)wparam;
+			event.AudioDevice.Name = (char *)lparam;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case KR_WM_AUDIO_RENDER_DEVICE_DEACTIVATED:
+		{
+			event.Kind = KrEvent_AudioRenderDeviceDeactived;
+			event.AudioDevice.Id   = (void *)wparam;
+			event.AudioDevice.Name = (char *)lparam;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
 		default:
 		{
 			res = DefWindowProcW(wnd, msg, wparam, lparam);
@@ -292,7 +348,37 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 	return res;
 }
 
+inproc bool PL_KrIsFullscreen() {
+	HWND hwnd     = g_MainWindow;
+	DWORD dwStyle = GetWindowLongW(hwnd, GWL_STYLE);
+	if (dwStyle & WS_OVERLAPPEDWINDOW) {
+		return false;
+	}
+	return true;
+}
+
+inproc void PL_KrToggleFullscreen() {
+	HWND hwnd     = g_MainWindow;
+	DWORD dwStyle = GetWindowLongW(hwnd, GWL_STYLE);
+	if (dwStyle & WS_OVERLAPPEDWINDOW) {
+		MONITORINFO mi = { sizeof(mi) };
+		if (GetWindowPlacement(hwnd, &g_MainWindowPlacement) &&
+			GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) {
+			SetWindowLongW(hwnd, GWL_STYLE, dwStyle & ~WS_OVERLAPPEDWINDOW);
+			SetWindowPos(hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
+				mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
+				SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+		}
+	} else {
+		SetWindowLongW(hwnd, GWL_STYLE, dwStyle | WS_OVERLAPPEDWINDOW);
+		SetWindowPlacement(hwnd, &g_MainWindowPlacement);
+		SetWindowPos(hwnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+	}
+}
+
 inproc void PL_ReleaseWindow() {
+	g_Library.Window = LibraryFallback.Window;
+
 	if (g_MainWindow) {
 		DestroyWindow(g_MainWindow);
 		g_MainWindow = nullptr;
@@ -328,25 +414,11 @@ inproc void PL_PrepareWindow() {
 	UpdateWindow(g_MainWindow);
 
 	GetWindowPlacement(g_MainWindow, &g_MainWindowPlacement);
-}
 
-inproc void PL_ToggleFullscreen() {
-	HWND hwnd     = g_MainWindow;
-	DWORD dwStyle = GetWindowLongW(hwnd, GWL_STYLE);
-	if (dwStyle & WS_OVERLAPPEDWINDOW) {
-		MONITORINFO mi = { sizeof(mi) };
-		if (GetWindowPlacement(hwnd, &g_MainWindowPlacement) &&
-			GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) {
-			SetWindowLongW(hwnd, GWL_STYLE, dwStyle & ~WS_OVERLAPPEDWINDOW);
-			SetWindowPos(hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
-				mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
-				SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-		}
-	} else {
-		SetWindowLongW(hwnd, GWL_STYLE, dwStyle | WS_OVERLAPPEDWINDOW);
-		SetWindowPlacement(hwnd, &g_MainWindowPlacement);
-		SetWindowPos(hwnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
-	}
+	g_Library.Window = (KrWindowLibrary){
+		.IsFullscreen     = PL_KrIsFullscreen,
+		.ToggleFullscreen = PL_KrToggleFullscreen,
+	};
 }
 
 //
@@ -383,7 +455,7 @@ typedef struct PL_AudioDevice {
 	struct PL_AudioDevice *Next;
 	char *                 Name;
 	KrAudioDeviceFlow      Flow;
-	volatile u32           Active;
+	volatile LONG          IsActive;
 	LPWSTR                 Id;
 	PL_KrDeviceName        Names[2];
 } PL_AudioDevice;
@@ -393,8 +465,8 @@ typedef enum PL_AudioEvent {
 	PL_AudioEvent_Resume,
 	PL_AudioEvent_Pause,
 	PL_AudioEvent_Reset,
-	PL_AudioEvent_DeviceLost,
-	PL_AudioEvent_DeviceRestart,
+	PL_AudioEvent_DeviceLoadDefault,
+	PL_AudioEvent_LoadDesiredDevice,
 	PL_AudioEvent_Exit,
 	PL_AudioEvent_EnumMax
 } PL_AudioEvent;
@@ -415,8 +487,9 @@ static IMMNotificationClient g_NotificationClient = {
 };
 
 static IMMDeviceEnumerator * g_AudioDeviceEnumerator;
-static PL_AudioDevice        g_AudioDeviceListHead = { .Name = "", .Flow = KrAudioDeviceFlow_EnumMax };
+static PL_AudioDevice        g_AudioDeviceListHead = { .Name = "Default", .Flow = KrAudioDeviceFlow_All };
 static volatile LONG         g_AudioDeviceListLock;
+//static PL_AudioDevice      * g_AudioDeviceRenderDefault;
 
 static struct {
 	IAudioClient         *Client;
@@ -426,8 +499,9 @@ static struct {
 	HANDLE                Events[PL_AudioEvent_EnumMax];
 	volatile LONG         DeviceIsLost;
 	volatile LONG         DeviceIsResumed;
-	PL_AudioDevice *      EffectiveAudioDevice;
-	PL_AudioDevice *      DesiredAudioDevice;
+	PL_AudioDevice *      DesiredDevice;
+	PL_AudioDevice *      EffectiveDevice;
+	volatile LONG         DefaultGeneration;
 	HANDLE                Thread;
 } g_AudioOut;
 
@@ -460,8 +534,7 @@ inproc LPWSTR PL_IMMDeviceId(IMMDevice *immdevice) {
 	return id;
 }
 
-inproc u32 PL_IMMDeviceActive(IMMDevice *immdevice) {
-	u32 flags   = 0;
+inproc LONG PL_IMMDeviceIsActive(IMMDevice *immdevice) {
 	DWORD state = 0;
 	HRESULT hr  = immdevice->lpVtbl->GetState(immdevice, &state);
 	if (FAILED(hr)) {
@@ -513,6 +586,16 @@ inproc PL_KrDeviceName PL_IMMDeviceName(IMMDevice *immdevice) {
 	return name;
 }
 
+inproc PL_AudioDevice *PL_FindAudioDeviceFromId(LPCWSTR id) {
+	PL_AudioDevice *device = g_AudioDeviceListHead.Next;
+	for (; device; device = device->Next) {
+		int res = wcscmp(id, device->Id);
+		if (res == 0)
+			return device;
+	}
+	return nullptr;
+}
+
 inproc PL_AudioDevice *PL_UpdateAudioDeviceList(IMMDevice *immdevice) {
 	LPWSTR id = PL_IMMDeviceId(immdevice);
 	if (!id) {
@@ -527,11 +610,11 @@ inproc PL_AudioDevice *PL_UpdateAudioDeviceList(IMMDevice *immdevice) {
 
 	memset(device, 0, sizeof(*device));
 
-	device->Id       = id;
-	device->Names[0] = PL_IMMDeviceName(immdevice);
-	device->Flow     = PL_IMMDeviceFlow(immdevice);
-	device->Active   = PL_IMMDeviceActive(immdevice);
-	device->Name     = device->Names[0].Buffer;
+	device->Id         = id;
+	device->Names[0]   = PL_IMMDeviceName(immdevice);
+	device->Flow       = PL_IMMDeviceFlow(immdevice);
+	device->IsActive   = PL_IMMDeviceIsActive(immdevice);
+	device->Name       = device->Names[0].Buffer;
 
 	// Insert in alphabetical order
 	PL_AudioDevice *prev = &g_AudioDeviceListHead;
@@ -546,14 +629,22 @@ inproc PL_AudioDevice *PL_UpdateAudioDeviceList(IMMDevice *immdevice) {
 	return device;
 }
 
-inproc PL_AudioDevice *PL_FindAudioDeviceFromId(LPCWSTR id) {
-	PL_AudioDevice *device = (PL_AudioDevice *)g_AudioDeviceListHead.Next;
-	for (;device; device = (PL_AudioDevice *)device->Next) {
-		if (wcscmp(id, device->Id) == 0)
-			return device;
-	}
-	return nullptr;
-}
+//inproc PL_AudioDevice *PL_UpdateDefaultAudioRenderDevice(LPCWSTR id) {
+//	if (id) {
+//		PL_AudioDevice *device = PL_FindAudioDeviceFromId(id);
+//		if (!device) {
+//			IMMDevice *immdevice = PL_IMMDeviceFromId(id);
+//			if (!immdevice) return g_AudioDeviceRenderDefault;
+//			device = PL_UpdateAudioDeviceList(immdevice);
+//			immdevice->lpVtbl->Release(immdevice);
+//			if (!device) return g_AudioDeviceRenderDefault;
+//		}
+//		Assert(device->Flow == KrAudioDeviceFlow_Render);
+//		return InterlockedExchangePointer(&g_AudioDeviceRenderDefault, device);
+//	} else {
+//		return InterlockedExchangePointer(&g_AudioDeviceRenderDefault, nullptr);
+//	}
+//}
 
 inproc HRESULT STDMETHODCALLTYPE PL_QueryInterface(IMMNotificationClient *This, REFIID riid, void **ppv_object) {
 	if (memcmp(&PL_IID_IUnknown, riid, sizeof(GUID)) == 0) {
@@ -570,14 +661,17 @@ inproc HRESULT STDMETHODCALLTYPE PL_QueryInterface(IMMNotificationClient *This, 
 inproc ULONG STDMETHODCALLTYPE PL_AddRef(IMMNotificationClient *This)  { return 1; }
 inproc ULONG STDMETHODCALLTYPE PL_Release(IMMNotificationClient *This) { return 1; }
 
+#include <stdio.h>
+
 inproc HRESULT STDMETHODCALLTYPE PL_OnDeviceStateChanged(IMMNotificationClient *This, LPCWSTR deviceid, DWORD newstate) {
 	KrAtomicLock(&g_AudioDeviceListLock);
 
 	PL_AudioDevice *device = PL_FindAudioDeviceFromId(deviceid);
 	u32 active = (newstate == DEVICE_STATE_ACTIVE);
+	u32 prev   = 0;
 
 	if (device) {
-		InterlockedExchange(&device->Active, active);
+		prev = InterlockedExchange(&device->IsActive, active);
 	} else {
 		// New device added
 		IMMDevice *immdevice = PL_IMMDeviceFromId(deviceid);
@@ -587,15 +681,38 @@ inproc HRESULT STDMETHODCALLTYPE PL_OnDeviceStateChanged(IMMNotificationClient *
 		}
 	}
 
-	if (device == InterlockedCompareExchangePointer(&g_AudioOut.DesiredAudioDevice, nullptr, nullptr)) {
-		if (active) {
-			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceRestart], 1, 0);
-		} else {
-			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceLost], 1, 0);
+	KrAtomicUnlock(&g_AudioDeviceListLock);
+
+	if (device && prev != active) {
+		if (device->Flow == KrAudioDeviceFlow_Render) {
+			UINT msg = active ? KR_WM_AUDIO_RENDER_DEVICE_ACTIVATED : KR_WM_AUDIO_RENDER_DEVICE_DEACTIVATED;
+			PostMessageW(g_MainWindow, msg, (WPARAM)device, (LPARAM)device->Name);
 		}
 	}
 
-	KrAtomicUnlock(&g_AudioDeviceListLock);
+	PL_AudioDevice *desired = InterlockedCompareExchangePointer(&g_AudioOut.DesiredDevice, nullptr, nullptr);
+
+	// If desired is nullptr, the default notification will handle the device as required
+	if (desired == nullptr)
+		return S_OK;
+
+	PL_AudioDevice *effective = InterlockedCompareExchangePointer(&g_AudioOut.EffectiveDevice, nullptr, nullptr);
+
+	if (active) {
+		if (device == desired) {
+			printf("0. Device Restart\n");
+			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_LoadDesiredDevice], 1, 0);
+		} else if (!effective) {
+			printf("1. Device Lost\n");
+			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceLoadDefault], 1, 0);
+		}
+	} else {
+		if (device == effective) {
+			printf("2. Device Lost\n");
+			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceLoadDefault], 1, 0);
+		}
+	}
+
 	return S_OK;
 }
 
@@ -604,15 +721,25 @@ inproc HRESULT STDMETHODCALLTYPE PL_OnDeviceAdded(IMMNotificationClient *This, L
 inproc HRESULT STDMETHODCALLTYPE PL_OnDeviceRemoved(IMMNotificationClient *This, LPCWSTR deviceid) { return S_OK; }
 
 inproc HRESULT STDMETHODCALLTYPE PL_OnDefaultDeviceChanged(IMMNotificationClient *This, EDataFlow flow, ERole role, LPCWSTR deviceid) {
-	KrAtomicLock(&g_AudioDeviceListLock);
-
 	if (flow == eRender && role == eMultimedia) {
-		if (InterlockedCompareExchangePointer(&g_AudioOut.DesiredAudioDevice, nullptr, nullptr) == nullptr) {
-			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceRestart], 1, 0);
+		//KrAtomicLock(&g_AudioDeviceListLock);
+		//PL_UpdateDefaultAudioRenderDevice(deviceid);
+		//KrAtomicUnlock(&g_AudioDeviceListLock);
+
+		if (!deviceid) {
+			// When there's no audio device in the system
+			PostMessageW(g_MainWindow, KR_WM_AUDIO_RENDER_DEVICE_LOST, 0, 0);
+			return S_OK;
+		}
+
+		PL_AudioDevice *desired = InterlockedCompareExchangePointer(&g_AudioOut.DesiredDevice, nullptr, nullptr);
+
+		if (desired == nullptr) {
+			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_LoadDesiredDevice], 1, 0);
+			printf("ondefault: load desired\n");
 		}
 	}
 
-	KrAtomicUnlock(&g_AudioDeviceListLock);
 	return S_OK;
 }
 
@@ -691,7 +818,6 @@ inproc void PL_ReleaseAudioRenderDevice() {
 		g_AudioOut.Client = nullptr;
 	}
 	g_AudioOut.MaxFrames = 0;
-
 	InterlockedExchange(&g_AudioOut.DeviceIsLost, 1);
 }
 
@@ -700,6 +826,26 @@ inproc bool PL_PrepareAudioRenderDevice(const PL_AudioDevice *device) {
 
 	IMMDevice *immdevice = device ? PL_IMMDeviceFromId(device->Id) : PL_GetDefaultIMMDevice(eRender);
 	if (!immdevice) return false;
+
+	if (!device) {
+		LPWSTR id = PL_IMMDeviceId(immdevice);
+		if (id) {
+			device = PL_FindAudioDeviceFromId(id);
+			if (!device) {
+				// This should never be the case but oh well
+				KrAtomicLock(&g_AudioDeviceListLock);
+				device = PL_UpdateAudioDeviceList(immdevice);
+				KrAtomicUnlock(&g_AudioDeviceListLock);
+			}
+			CoTaskMemFree(id);
+		}
+	}
+
+	if (!device) {
+		// Error
+		immdevice->lpVtbl->Release(immdevice);
+		return false;
+	}
 
 	HRESULT hr = immdevice->lpVtbl->Activate(immdevice, &PL_IID_IAudioClient, CLSCTX_ALL, nullptr, &g_AudioOut.Client);
 	if (FAILED(hr)) goto failed;
@@ -733,7 +879,7 @@ inproc bool PL_PrepareAudioRenderDevice(const PL_AudioDevice *device) {
 
 	immdevice->lpVtbl->Release(immdevice);
 
-	InterlockedExchangePointer(&g_AudioOut.EffectiveAudioDevice, (PL_AudioDevice *)device);
+	InterlockedExchangePointer(&g_AudioOut.EffectiveDevice, (PL_AudioDevice *)device);
 	InterlockedExchange(&g_AudioOut.DeviceIsLost, 0);
 
 	return true;
@@ -798,8 +944,10 @@ inproc void PL_ResumeAudio() {
 	InterlockedExchange(&g_AudioOut.DeviceIsResumed, 1);
 
 	HRESULT hr = g_AudioOut.Client->lpVtbl->Start(g_AudioOut.Client);
-	if (SUCCEEDED(hr) || hr == AUDCLNT_E_NOT_STOPPED)
+	if (SUCCEEDED(hr) || hr == AUDCLNT_E_NOT_STOPPED) {
+		PostMessageW(g_MainWindow, KR_WM_AUDIO_RESUMED, 0, 0);
 		return;
+	}
 	InterlockedExchange(&g_AudioOut.DeviceIsLost, 1);
 	Unimplemented();
 }
@@ -808,8 +956,10 @@ inproc void PL_PauseAudio() {
 	InterlockedExchange(&g_AudioOut.DeviceIsResumed, 0);
 
 	HRESULT hr = g_AudioOut.Client->lpVtbl->Stop(g_AudioOut.Client);
-	if (SUCCEEDED(hr))
+	if (SUCCEEDED(hr)) {
+		PostMessageW(g_MainWindow, KR_WM_AUDIO_PAUSED, 0, 0);
 		return;
+	}
 	InterlockedExchange(&g_AudioOut.DeviceIsLost, 1);
 	Unimplemented();
 }
@@ -817,9 +967,28 @@ inproc void PL_PauseAudio() {
 inproc void PL_ResetAudio() {
 	PL_PauseAudio();
 	HRESULT hr = g_AudioOut.Client->lpVtbl->Reset(g_AudioOut.Client);
-	if (SUCCEEDED(hr))
+	if (SUCCEEDED(hr)) {
+		PostMessageW(g_MainWindow, KR_WM_AUDIO_RESET, 0, 0);
 		return;
+	}
 	InterlockedExchange(&g_AudioOut.DeviceIsLost, 1);
+}
+
+inproc void PL_RestartAudioDevice(PL_AudioDevice **devices_list, int count) {
+	PL_ReleaseAudioRenderDevice();
+	for (int index = 0; index < count; ++index) {
+		PL_AudioDevice *device = devices_list[index];
+		if (PL_PrepareAudioRenderDevice(device)) {
+			PostMessageW(g_MainWindow, KR_WM_AUDIO_RENDER_DEVICE_CHANGED,
+				(WPARAM)g_AudioOut.EffectiveDevice, (LPARAM)g_AudioOut.EffectiveDevice->Name);
+			PL_UpdateAudio();
+			if (g_AudioOut.DeviceIsResumed) {
+				PL_ResumeAudio();
+			}
+			return;
+		}
+	}
+	InterlockedExchangePointer(&g_AudioOut.EffectiveDevice, nullptr);
 }
 
 inproc DWORD WINAPI PL_AudioThread(LPVOID param) {
@@ -829,8 +998,12 @@ inproc DWORD WINAPI PL_AudioThread(LPVOID param) {
 	DWORD task_index;
 	HANDLE avrt = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index);
 
-	if (PL_PrepareAudioRenderDevice(g_AudioOut.DesiredAudioDevice)) {
-		// todo: event render device gained
+	{
+		// Using nullptr instead of the cached device for default because
+		// the notification might not have updated the cache to the latest default device
+		// Same cases for the code blocks in the following loop
+		PL_AudioDevice *devices_priority_list[] = { g_AudioOut.DesiredDevice, nullptr };
+		PL_RestartAudioDevice(devices_priority_list, ArrayCount(devices_priority_list));
 	}
 
 	while (1) {
@@ -838,38 +1011,26 @@ inproc DWORD WINAPI PL_AudioThread(LPVOID param) {
 
 		HRESULT hr = S_OK;
 
-		// todo: events
 		if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Update) {
-			PL_UpdateAudio();
+			if (!g_AudioOut.DeviceIsLost)
+				PL_UpdateAudio();
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Resume) {
 			PL_ResumeAudio();
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Pause) {
 			PL_PauseAudio();
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Reset) {
 			PL_ResetAudio();
-		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_DeviceLost) {
-			PL_ReleaseAudioRenderDevice();
-			if (PL_PrepareAudioRenderDevice(nullptr)) {
-				// todo: swapping event
-				PL_UpdateAudio();
-				if (g_AudioOut.DeviceIsResumed) {
-					PL_ResumeAudio();
-				}
-			}
-		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_DeviceRestart) {
-			PL_ReleaseAudioRenderDevice();
-			if (PL_PrepareAudioRenderDevice(g_AudioOut.DesiredAudioDevice)) {
-				// todo: swapping event
-				PL_UpdateAudio();
-				if (g_AudioOut.DeviceIsResumed) {
-					PL_ResumeAudio();
-				}
-			}
+		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_DeviceLoadDefault) {
+			PL_AudioDevice *devices_priority_list[] = { nullptr };
+			PL_RestartAudioDevice(devices_priority_list, ArrayCount(devices_priority_list));
+		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_LoadDesiredDevice) {
+			PL_AudioDevice *desired   = InterlockedCompareExchangePointer(&g_AudioOut.DesiredDevice, nullptr, nullptr);
+			//PL_AudioDevice *effective = InterlockedCompareExchangePointer(&g_AudioOut.EffectiveDevice, nullptr, nullptr);
+			PL_AudioDevice *devices_priority_list[] = { desired, nullptr };
+			PL_RestartAudioDevice(devices_priority_list, ArrayCount(devices_priority_list));
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Exit) {
 			break;
 		}
-
-		// todo: check for default device changes, device lost and device gained and events
 	}
 
 	PL_ReleaseAudioRenderDevice();
@@ -941,25 +1102,40 @@ inproc bool PL_KrAudioSetRenderDevice(KrAudioDeviceId id) {
 	PL_AudioDevice *device = id;
 	if (device && device->Flow == KrAudioDeviceFlow_Capture)
 		return false;
-	PL_AudioDevice *prev = InterlockedExchangePointer(&g_AudioOut.DesiredAudioDevice, device);
+	PL_AudioDevice *prev = InterlockedExchangePointer(&g_AudioOut.DesiredDevice, device);
 	if (prev != device) {
-		ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceRestart], 1, 0);
+		ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_LoadDesiredDevice], 1, 0);
 	}
 	return true;
 }
 
-inproc uint PL_KrAudioGetDevices(KrAudioDeviceFlow flow, bool inactive, KrAudioDeviceInfo *output, uint cap) {
+inproc uint PL_KrAudioGetDeviceList(KrAudioDeviceFlow flow, bool inactive, KrAudioDeviceInfo *output, uint cap) {
 	uint count = 0;
 	uint index = 0;
 	for (PL_AudioDevice *device = g_AudioDeviceListHead.Next; device; device = device->Next) {
-		if (device->Flow == flow && device->Active || inactive) {
+		if (device->Flow == flow && (device->IsActive || inactive)) {
 			if (index < cap) {
 				output[index++] = (KrAudioDeviceInfo){ .Id = device, .Name = device->Name };
 			}
 			count += 1;
 		}
 	}
+
 	return output ? index : count;
+}
+
+inproc bool PL_KrAudioGetEffectiveDevice(KrAudioDeviceInfo *output) {
+	output->Id   = 0;
+	output->Name = "Default";
+
+	PL_AudioDevice *device = InterlockedCompareExchangePointer(&g_AudioOut.EffectiveDevice, nullptr, nullptr);
+	if (device) {
+		output->Id   = device->Id;
+		output->Name = device->Name;
+	}
+
+	device = InterlockedCompareExchangePointer(&g_AudioOut.DesiredDevice, nullptr, nullptr);
+	return device == nullptr;
 }
 
 inproc void PL_PrepareAudio() {
@@ -1017,6 +1193,16 @@ inproc void PL_PrepareAudio() {
 
 		device_col->lpVtbl->Release(device_col);
 
+		//immdevice = PL_GetDefaultIMMDevice(eRender);
+		//if (immdevice) {
+		//	LPWSTR id = PL_IMMDeviceId(immdevice);
+		//	if (id) {
+		//		PL_UpdateDefaultAudioRenderDevice(id);
+		//		CoTaskMemFree(id);
+		//	}
+		//	immdevice->lpVtbl->Release(immdevice);
+		//}
+
 		KrAtomicUnlock(&g_AudioDeviceListLock);
 	}
 
@@ -1025,14 +1211,15 @@ inproc void PL_PrepareAudio() {
 		Unimplemented();
 	}
 
-	g_Library.Audio      = (KrAudioLibrary) {
-		.IsPlaying       = PL_KrAudioIsPlaying,
-		.Update          = PL_KrAudioUpdate,
-		.Resume          = PL_KrAudioResume,
-		.Pause           = PL_KrAudioPause,
-		.Reset           = PL_KrAudioReset,
-		.SetRenderDevice = PL_KrAudioSetRenderDevice,
-		.GetDevices      = PL_KrAudioGetDevices
+	g_Library.Audio = (KrAudioLibrary) {
+		.IsPlaying          = PL_KrAudioIsPlaying,
+		.Update             = PL_KrAudioUpdate,
+		.Resume             = PL_KrAudioResume,
+		.Pause              = PL_KrAudioPause,
+		.Reset              = PL_KrAudioReset,
+		.SetRenderDevice    = PL_KrAudioSetRenderDevice,
+		.GetDeviceList      = PL_KrAudioGetDeviceList,
+		.GetEffectiveDevice = PL_KrAudioGetEffectiveDevice
 	};
 }
 
@@ -1042,7 +1229,7 @@ inproc void PL_PrepareAudio() {
 
 inproc int PL_MessageLoop() {
 	KrEvent event;
-	event.Kind = KrEventKind_Startup;
+	event.Kind = KrEvent_Startup;
 	g_UserContext.OnEvent(&event, g_UserContext.Data);
 
 	bool running = true;
@@ -1061,7 +1248,7 @@ inproc int PL_MessageLoop() {
 		g_UserContext.OnUpdate(g_UserContext.Data);
 	}
 
-	event.Kind = KrEventKind_Quit;
+	event.Kind = KrEvent_Quit;
 	g_UserContext.OnEvent(&event, g_UserContext.Data);
 	
 	return 0;
