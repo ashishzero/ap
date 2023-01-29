@@ -665,8 +665,6 @@ inproc HRESULT STDMETHODCALLTYPE PL_QueryInterface(IMMNotificationClient *This, 
 inproc ULONG STDMETHODCALLTYPE PL_AddRef(IMMNotificationClient *This)  { return 1; }
 inproc ULONG STDMETHODCALLTYPE PL_Release(IMMNotificationClient *This) { return 1; }
 
-#include <stdio.h>
-
 inproc HRESULT STDMETHODCALLTYPE PL_OnDeviceStateChanged(IMMNotificationClient *This, LPCWSTR deviceid, DWORD newstate) {
 	KrAtomicLock(&g_AudioDeviceListLock);
 
@@ -705,15 +703,12 @@ inproc HRESULT STDMETHODCALLTYPE PL_OnDeviceStateChanged(IMMNotificationClient *
 
 	if (active) {
 		if (device == desired) {
-			printf("0. Device Restart\n");
 			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_LoadDesiredDevice], 1, 0);
 		} else if (!effective) {
-			printf("1. Device Lost\n");
 			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceLostLoadDefault], 1, 0);
 		}
 	} else {
 		if (device == effective) {
-			printf("2. Device Lost\n");
 			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_DeviceLostLoadDefault], 1, 0);
 		}
 	}
@@ -737,7 +732,6 @@ inproc HRESULT STDMETHODCALLTYPE PL_OnDefaultDeviceChanged(IMMNotificationClient
 
 		if (desired == nullptr) {
 			ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_LoadDesiredDevice], 1, 0);
-			printf("ondefault: load desired\n");
 		}
 	}
 
@@ -916,6 +910,9 @@ inproc void PL_ReleaseAudioBuffer(u32 written, u32 frames) {
 }
 
 inproc void PL_UpdateAudio() {
+	if (g_AudioOut.DeviceIsLost)
+		return;
+
 	BYTE *data = nullptr;
 	u32 frames = 0;
 	if (PL_GetAudioBuffer(&data, &frames)) {
@@ -926,6 +923,9 @@ inproc void PL_UpdateAudio() {
 
 inproc void PL_ResumeAudio() {
 	InterlockedExchange(&g_AudioOut.DeviceIsResumed, 1);
+
+	if (g_AudioOut.DeviceIsLost)
+		return;
 
 	HRESULT hr = g_AudioOut.Client->lpVtbl->Start(g_AudioOut.Client);
 	if (SUCCEEDED(hr) || hr == AUDCLNT_E_NOT_STOPPED) {
@@ -939,6 +939,9 @@ inproc void PL_ResumeAudio() {
 inproc void PL_PauseAudio() {
 	InterlockedExchange(&g_AudioOut.DeviceIsResumed, 0);
 
+	if (g_AudioOut.DeviceIsLost)
+		return;
+
 	HRESULT hr = g_AudioOut.Client->lpVtbl->Stop(g_AudioOut.Client);
 	if (SUCCEEDED(hr)) {
 		PostMessageW(g_MainWindow, KR_WM_AUDIO_PAUSED, 0, 0);
@@ -950,6 +953,10 @@ inproc void PL_PauseAudio() {
 
 inproc void PL_ResetAudio() {
 	PL_PauseAudio();
+
+	if (g_AudioOut.DeviceIsLost)
+		return;
+
 	HRESULT hr = g_AudioOut.Client->lpVtbl->Reset(g_AudioOut.Client);
 	if (SUCCEEDED(hr)) {
 		PostMessageW(g_MainWindow, KR_WM_AUDIO_RESET, 0, 0);
@@ -1005,8 +1012,7 @@ inproc DWORD WINAPI PL_AudioThread(LPVOID param) {
 		HRESULT hr = S_OK;
 
 		if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Update) {
-			if (!g_AudioOut.DeviceIsLost)
-				PL_UpdateAudio();
+			PL_UpdateAudio();
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Resume) {
 			PL_ResumeAudio();
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioEvent_Pause) {
