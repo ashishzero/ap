@@ -8,7 +8,21 @@ inproc void KrAudioResetFallback() {}
 inproc bool KrAudioSetRenderDeviceFallback(KrAudioDeviceId id) { return false; }
 inproc uint KrAudioGetDevicesFallback(KrAudioDeviceFlow flow, bool inactive, KrAudioDeviceInfo *output, uint cap) { return 0; }
 
+inproc void KrEventFallback(const KrEvent *event, void *user) {}
+inproc void KrUpdateFallback(void *user) {}
 inproc u32  KrUploadAudioFallback(const KrAudioSpec *spec, u8 *data, u32 count, void *user) { return 0; }
+
+const KrLibrary LibraryFallback = {
+	.Audio = {
+		.IsPlaying       = KrAudioIsPlayingFallback,
+		.Update          = KrAudioUpdateFallback,
+		.Resume          = KrAudioResumeFallback,
+		.Pause           = KrAudioPauseFallback,
+		.Reset           = KrAudioResetFallback,
+		.SetRenderDevice = KrAudioSetRenderDeviceFallback,
+		.GetDevices      = KrAudioGetDevicesFallback,
+	},
+};
 
 KrLibrary g_Library = {
 	.Audio = {
@@ -22,9 +36,11 @@ KrLibrary g_Library = {
 	},
 };
 
-KrUserConfig g_UserConfig = {
-	.Data           = nullptr,
-	.OnUploadAudio = KrUploadAudioFallback
+KrUserContext g_UserContext = {
+	.Data          = nullptr,
+	.OnEvent       = KrEventFallback,
+	.OnUpdate      = KrUpdateFallback,
+	.OnUploadAudio = KrUploadAudioFallback,
 };
 
 proc bool KrAudioIsPlaying() {
@@ -55,10 +71,24 @@ proc uint KrAudioGetDevices(KrAudioDeviceFlow flow, bool inactive, KrAudioDevice
 	return g_Library.Audio.GetDevices(flow, inactive, output, cap);
 }
 
-KrUserConfig *KrUserConfigGet() {
-	return &g_UserConfig;
-}
-
-proc int KrRun() {
-	return g_Library.Main.Run();
+const char *KrEventNamed(KrEventKind kind) {
+	static const char *EventNames[] = {
+		[KrEventKind_Startup]           = "Startup",
+		[KrEventKind_Quit]              = "Quit",
+		[KrEventKind_WindowCreated]     = "WindowCreated",
+		[KrEventKind_WindowDestroyed]   = "WindowClosed",
+		[KrEventKind_WindowActivated]   = "WindowActivated",
+		[KrEventKind_WindowDeactivated] = "WindowDeactivated",
+		[KrEventKind_WindowResized]     = "WindowResized",
+		[KrEventKind_MouseMoved]        = "MouseMoved",
+		[KrEventKind_ButtonPressed]     = "ButtonPressed",
+		[KrEventKind_ButtonReleased]    = "ButtonReleased",
+		[KrEventKind_DoubleClicked]     = "DoubleClicked",
+		[KrEventKind_WheelMoved]        = "WheenMoved",
+		[KrEventKind_KeyPressed]        = "KeyPressed",
+		[KrEventKind_KeyReleased]       = "KeyReleased",
+		[KrEventKind_TextInput]         = "TextInput",
+	};
+	static_assert(ArrayCount(EventNames) == KrEventKind_EnumMax, "");
+	return EventNames[kind];
 }

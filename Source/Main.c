@@ -120,7 +120,19 @@ i16 *Serialize(Audio_Stream *audio, uint *count) {
 	return (i16 *)(ptr + 1);
 }
 
-int Main(int argc, char **argv) {
+void HandleEvent(const KrEvent *event, void *user) {
+	if (event->Kind == KrEventKind_Startup) {
+		KrAudioUpdate();
+		KrAudioResume();
+	}
+
+	printf("Event: %s\n", KrEventNamed(event->Kind));
+}
+
+void Update(void *data) {
+}
+
+int Main(int argc, char **argv, KrUserContext *ctx) {
 	if (argc <= 1){
 		Usage(argv[0]);
 	}
@@ -133,14 +145,9 @@ int Main(int argc, char **argv) {
 
 	CurrentStream = Serialize(audio, &MaxFrame);
 
-	KrUserConfig *config = KrUserConfigGet();
-	//config->Data = ?;
-	//config->OnEvent = ?;
-	config->OnUploadAudio = UploadAudioFrames;
-	//config->OnUpdate = ?;
+	ctx->OnEvent       = HandleEvent;
+	ctx->OnUpdate      = Update;
+	ctx->OnUploadAudio = UploadAudioFrames;
 
-	KrAudioUpdate();
-	KrAudioResume();
-
-	return KrRun();
+	return 0;
 }

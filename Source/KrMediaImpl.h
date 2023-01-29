@@ -19,16 +19,10 @@ typedef struct KrAudioLibrary {
 	KrAudio_GetDevices      GetDevices;
 } KrAudioLibrary;
 
-typedef int (*KrMain_Run)();
-
-typedef struct KrMain_Library {
-	KrMain_Run Run;
-} KrMain_Library;
-
 typedef struct KrLibrary {
 	KrAudioLibrary Audio;
-	KrMain_Library Main;
 } KrLibrary;
 
-extern KrLibrary    g_Library;
-extern KrUserConfig g_UserConfig;
+extern const KrLibrary LibraryFallback;
+extern KrLibrary       g_Library;
+extern KrUserContext   g_UserContext;

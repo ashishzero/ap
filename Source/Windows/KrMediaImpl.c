@@ -4,6 +4,7 @@
 #pragma warning(disable: 5105)
 
 #include <windows.h>
+#include <windowsx.h>
 #include <initguid.h>
 #include <mmdeviceapi.h>
 #include <Audioclient.h>
@@ -44,17 +45,232 @@ inproc int PL_UTF16ToUTF8(char *utf8_buff, int utf8_buff_len, const char16_t *ut
 // [Window]
 //
 
-static WINDOWPLACEMENT g_WindowPlacement;
+static WINDOWPLACEMENT g_MainWindowPlacement;
 static HWND            g_MainWindow;
+
+static const KrKey VirtualKeyMap[] = {
+	['A'] = KrKey_A, ['B'] = KrKey_B,
+	['C'] = KrKey_C, ['D'] = KrKey_D,
+	['E'] = KrKey_E, ['F'] = KrKey_F,
+	['G'] = KrKey_G, ['H'] = KrKey_H,
+	['I'] = KrKey_I, ['J'] = KrKey_J,
+	['K'] = KrKey_K, ['L'] = KrKey_L,
+	['M'] = KrKey_M, ['N'] = KrKey_N,
+	['O'] = KrKey_O, ['P'] = KrKey_P,
+	['Q'] = KrKey_Q, ['R'] = KrKey_R,
+	['S'] = KrKey_S, ['T'] = KrKey_T,
+	['U'] = KrKey_U, ['V'] = KrKey_V,
+	['W'] = KrKey_W, ['X'] = KrKey_X,
+	['Y'] = KrKey_Y, ['Z'] = KrKey_Z,
+
+	['0'] = KrKey_0, ['1'] = KrKey_1,
+	['2'] = KrKey_2, ['3'] = KrKey_3,
+	['4'] = KrKey_4, ['5'] = KrKey_5,
+	['6'] = KrKey_6, ['7'] = KrKey_7,
+	['8'] = KrKey_8, ['9'] = KrKey_9,
+
+	[VK_NUMPAD0] = KrKey_0, [VK_NUMPAD1] = KrKey_1,
+	[VK_NUMPAD2] = KrKey_2, [VK_NUMPAD3] = KrKey_3,
+	[VK_NUMPAD4] = KrKey_4, [VK_NUMPAD5] = KrKey_5,
+	[VK_NUMPAD6] = KrKey_6, [VK_NUMPAD7] = KrKey_7,
+	[VK_NUMPAD8] = KrKey_8, [VK_NUMPAD9] = KrKey_9,
+
+	[VK_F1]  = KrKey_F1,  [VK_F2]  = KrKey_F2,
+	[VK_F3]  = KrKey_F3,  [VK_F4]  = KrKey_F4,
+	[VK_F5]  = KrKey_F5,  [VK_F6]  = KrKey_F6,
+	[VK_F7]  = KrKey_F7,  [VK_F8]  = KrKey_F8,
+	[VK_F9]  = KrKey_F9,  [VK_F10] = KrKey_F10,
+	[VK_F11] = KrKey_F11, [VK_F12] = KrKey_F12,
+
+	[VK_SNAPSHOT] = KrKey_PrintScreen,  [VK_INSERT]   = KrKey_Insert,
+	[VK_HOME]     = KrKey_Home,         [VK_PRIOR]    = KrKey_PageUp,
+	[VK_NEXT]     = KrKey_PageDown,     [VK_DELETE]   = KrKey_Delete,
+	[VK_END]      = KrKey_End,          [VK_RIGHT]    = KrKey_Right,
+	[VK_LEFT]     = KrKey_Left,         [VK_DOWN]     = KrKey_Down,
+	[VK_UP]       = KrKey_Up,           [VK_DIVIDE]   = KrKey_Divide,
+	[VK_MULTIPLY] = KrKey_Multiply,     [VK_ADD]      = KrKey_Plus,
+	[VK_SUBTRACT] = KrKey_Minus,        [VK_DECIMAL]  = KrKey_Period,
+	[VK_OEM_3]    = KrKey_BackTick,     [VK_CONTROL]  = KrKey_Ctrl,
+	[VK_RETURN]   = KrKey_Return,       [VK_ESCAPE]   = KrKey_Escape,
+	[VK_BACK]     = KrKey_Backspace,    [VK_TAB]      = KrKey_Tab,
+	[VK_SPACE]    = KrKey_Space,        [VK_SHIFT]    = KrKey_Shift,
+};
+
+static void PL_NormalizeCursorPosition(HWND hwnd, int x, int y, i32 *nx, i32 *ny) {
+	RECT rc;
+	GetClientRect(hwnd, &rc);
+	int window_w = rc.right - rc.left;
+	int window_h = rc.bottom - rc.top;
+
+	*nx = x;
+	*ny = window_h - y;
+}
 
 static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam) {
 	LRESULT res = 0;
 
+	KrEvent event = {0};
+
 	switch (msg) {
-		case WM_DESTROY:
+		case WM_ACTIVATE:
+		{
+			int low = LOWORD(wparam);
+
+			if (low == WA_ACTIVE || low == WA_CLICKACTIVE)
+				event.Kind = KrEventKind_WindowActivated;
+			else
+				event.Kind = KrEventKind_WindowDeactivated;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+
+			res = DefWindowProcW(wnd, msg, wparam, lparam);
+		} break;
+
+		case WM_CREATE:
 		{
 			res = DefWindowProcW(wnd, msg, wparam, lparam);
+
+			event.Kind = KrEventKind_WindowCreated;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case WM_DESTROY:
+		{
+			event.Kind = KrEventKind_WindowDestroyed;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+
+			res = DefWindowProcW(wnd, msg, wparam, lparam);
 			PostQuitMessage(0);
+		} break;
+
+		case WM_SIZE:
+		{
+			int x = LOWORD(lparam);
+			int y = HIWORD(lparam);
+
+			event.Kind = KrEventKind_WindowResized;
+			event.Window.Width  = x;
+			event.Window.Height = y;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case WM_MOUSEMOVE: {
+			int x = GET_X_LPARAM(lparam);
+			int y = GET_Y_LPARAM(lparam);
+
+			event.Kind = KrEventKind_MouseMoved;
+			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case WM_LBUTTONUP:
+		case WM_LBUTTONDOWN: {
+			int x = GET_X_LPARAM(lparam);
+			int y = GET_Y_LPARAM(lparam);
+
+			event.Kind = msg == WM_LBUTTONDOWN ? KrEventKind_ButtonPressed : KrEventKind_ButtonReleased;
+			event.Mouse.Button = KrButton_Left;
+			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case WM_RBUTTONUP:
+		case WM_RBUTTONDOWN: {
+			int x = GET_X_LPARAM(lparam);
+			int y = GET_Y_LPARAM(lparam);
+
+			event.Kind = msg == WM_LBUTTONDOWN ? KrEventKind_ButtonPressed : KrEventKind_ButtonReleased;
+			event.Mouse.Button = KrButton_Right;
+			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case WM_MBUTTONUP:
+		case WM_MBUTTONDOWN: {
+			int x = GET_X_LPARAM(lparam);
+			int y = GET_Y_LPARAM(lparam);
+
+			event.Kind = msg == WM_LBUTTONDOWN ? KrEventKind_ButtonPressed : KrEventKind_ButtonReleased;
+			event.Mouse.Button = KrButton_Middle;
+			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case WM_LBUTTONDBLCLK: {
+			int x = GET_X_LPARAM(lparam);
+			int y = GET_Y_LPARAM(lparam);
+
+			event.Kind = KrEventKind_DoubleClicked;
+			event.Mouse.Button = KrButton_Left;
+			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case WM_RBUTTONDBLCLK: {
+			int x = GET_X_LPARAM(lparam);
+			int y = GET_Y_LPARAM(lparam);
+
+			event.Kind = KrEventKind_DoubleClicked;
+			event.Mouse.Button = KrButton_Right;
+			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case WM_MBUTTONDBLCLK: {
+			int x = GET_X_LPARAM(lparam);
+			int y = GET_Y_LPARAM(lparam);
+
+			event.Kind = KrEventKind_DoubleClicked;
+			event.Mouse.Button = KrButton_Middle;
+			PL_NormalizeCursorPosition(wnd, x, y, &event.Mouse.X, &event.Mouse.Y);
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case WM_MOUSEWHEEL: {
+			int x = GET_X_LPARAM(lparam);
+			int y = GET_Y_LPARAM(lparam);
+
+			event.Kind = KrEventKind_WheelMoved;
+			event.Wheel.Vert = (float)GET_WHEEL_DELTA_WPARAM(wparam) / (float)WHEEL_DELTA;
+			event.Wheel.Horz = 0.0f;
+			PL_NormalizeCursorPosition(wnd, x, y, &event.Wheel.X, &event.Wheel.Y);
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case WM_MOUSEHWHEEL: {
+			int x = GET_X_LPARAM(lparam);
+			int y = GET_Y_LPARAM(lparam);
+
+			event.Kind = KrEventKind_WheelMoved;
+			event.Wheel.Vert = 0.0f;
+			event.Wheel.Horz = (float)GET_WHEEL_DELTA_WPARAM(wparam) / (float)WHEEL_DELTA;
+			PL_NormalizeCursorPosition(wnd, x, y, &event.Wheel.X, &event.Wheel.Y);
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
+		} break;
+
+		case WM_KEYUP:
+		case WM_KEYDOWN: {
+			if (wparam < ArrayCount(VirtualKeyMap)) {
+				event.Kind = msg == WM_KEYDOWN ? KrEventKind_KeyPressed : KrEventKind_KeyReleased;
+				event.Key.Code   = VirtualKeyMap[wparam];
+				event.Key.Repeat = HIWORD(lparam) & KF_REPEAT;
+				g_UserContext.OnEvent(&event, g_UserContext.Data);
+			}
+		} break;
+
+		case WM_SYSKEYUP:
+		case WM_SYSKEYDOWN: {
+			if (wparam == VK_F10) {
+				event.Kind = msg == WM_KEYDOWN ? KrEventKind_KeyPressed : KrEventKind_KeyReleased;
+				event.Key.Code = KrKey_F10;
+				event.Key.Repeat = HIWORD(lparam) & KF_REPEAT;
+				g_UserContext.OnEvent(&event, g_UserContext.Data);
+			}
+		} break;
+
+		case WM_CHAR: {
+			event.Kind = KrEventKind_TextInput;
+			event.Text.Code = (u16)wparam;
+			g_UserContext.OnEvent(&event, g_UserContext.Data);
 		} break;
 
 		case WM_DPICHANGED:
@@ -88,7 +304,7 @@ inproc void PL_PrepareWindow() {
 
 	WNDCLASSEXW wnd_class = {
 		.cbSize        = sizeof(wnd_class),
-		.style         = CS_HREDRAW | CS_VREDRAW,
+		.style         = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS,
 		.lpfnWndProc   = PL_HandleWindowsEvent,
 		.hInstance     = instance,
 		.hIcon         = (HICON)LoadImageW(instance, MAKEINTRESOURCEW(102), IMAGE_ICON, 0, 0, LR_SHARED),
@@ -102,14 +318,35 @@ inproc void PL_PrepareWindow() {
 		wnd_title = L"Kr Window";
 	}
 
-	g_MainWindow = CreateWindowExW(WS_EX_APPWINDOW, wnd_class.lpszClassName, wnd_title, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
-		CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, instance, nullptr);
+	g_MainWindow = CreateWindowExW(WS_EX_APPWINDOW, wnd_class.lpszClassName, wnd_title, WS_OVERLAPPEDWINDOW,
+		CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, nullptr, nullptr, instance, nullptr);
 	if (!g_MainWindow) {
 		Unimplemented();
 	}
 
+	ShowWindow(g_MainWindow, SW_SHOWNORMAL);
 	UpdateWindow(g_MainWindow);
-	ShowWindow(g_MainWindow, SW_NORMAL);
+
+	GetWindowPlacement(g_MainWindow, &g_MainWindowPlacement);
+}
+
+inproc void PL_ToggleFullscreen() {
+	HWND hwnd     = g_MainWindow;
+	DWORD dwStyle = GetWindowLongW(hwnd, GWL_STYLE);
+	if (dwStyle & WS_OVERLAPPEDWINDOW) {
+		MONITORINFO mi = { sizeof(mi) };
+		if (GetWindowPlacement(hwnd, &g_MainWindowPlacement) &&
+			GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) {
+			SetWindowLongW(hwnd, GWL_STYLE, dwStyle & ~WS_OVERLAPPEDWINDOW);
+			SetWindowPos(hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
+				mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
+				SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+		}
+	} else {
+		SetWindowLongW(hwnd, GWL_STYLE, dwStyle | WS_OVERLAPPEDWINDOW);
+		SetWindowPlacement(hwnd, &g_MainWindowPlacement);
+		SetWindowPos(hwnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+	}
 }
 
 //
@@ -552,7 +789,7 @@ inproc void PL_UpdateAudio() {
 	BYTE *data = nullptr;
 	u32 frames = 0;
 	if (PL_GetAudioBuffer(&data, &frames)) {
-		u32 written = g_UserConfig.OnUploadAudio(&g_AudioOut.Spec, data, frames, g_UserConfig.Data);
+		u32 written = g_UserContext.OnUploadAudio(&g_AudioOut.Spec, data, frames, g_UserContext.Data);
 		PL_ReleaseAudioBuffer(written, frames);
 	}
 }
@@ -643,6 +880,8 @@ inproc DWORD WINAPI PL_AudioThread(LPVOID param) {
 }
 
 inproc void PL_ReleaseAudio() {
+	g_Library.Audio = LibraryFallback.Audio;
+
 	if (g_AudioOut.Thread) {
 		ReleaseSemaphore(g_AudioOut.Events[PL_AudioEvent_Exit], 1, 0);
 
@@ -798,10 +1037,14 @@ inproc void PL_PrepareAudio() {
 }
 
 //
-// Run
+// Message Loop
 //
 
-inproc int PL_KrRun() {
+inproc int PL_MessageLoop() {
+	KrEvent event;
+	event.Kind = KrEventKind_Startup;
+	g_UserContext.OnEvent(&event, g_UserContext.Data);
+
 	bool running = true;
 
 	while (running) {
@@ -814,8 +1057,13 @@ inproc int PL_KrRun() {
 			TranslateMessage(&msg);
 			DispatchMessageW(&msg);
 		}
+
+		g_UserContext.OnUpdate(g_UserContext.Data);
 	}
 
+	event.Kind = KrEventKind_Quit;
+	g_UserContext.OnEvent(&event, g_UserContext.Data);
+	
 	return 0;
 }
 
@@ -872,15 +1120,17 @@ inproc int PL_Main() {
 	int argc    = 0;
 	char **argv = PL_CommandLineArguments(&argc);
 
-	PL_PrepareWindow();
-	PL_PrepareAudio();
+	int res = Main(argc, argv, &g_UserContext);
 
-	g_Library.Main.Run = PL_KrRun;
+	if (res == 0) {
+		PL_PrepareWindow();
+		PL_PrepareAudio();
 
-	int res = Main(argc, argv);
+		res = PL_MessageLoop();
 
-	PL_ReleaseAudio();
-	PL_ReleaseWindow();
+		PL_ReleaseAudio();
+		PL_ReleaseWindow();
+	}
 
 	CoUninitialize();
 
