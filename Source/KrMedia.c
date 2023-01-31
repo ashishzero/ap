@@ -12,7 +12,7 @@ inproc bool KrWindowIsFullscreenFallback() { return false; }
 inproc void KrWindowToggleFullscreenFallback() {}
 
 inproc void KrEventFallback(const KrEvent *event, void *user) {}
-inproc void KrUpdateFallback(void *user) {}
+inproc void KrUpdateFallback(float w, float h, void *user) {}
 inproc u32  KrUploadAudioFallback(const KrAudioSpec *spec, u8 *data, u32 count, void *user) { return 0; }
 
 const KrLibrary LibraryFallback = {

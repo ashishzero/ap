@@ -5,11 +5,15 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define RENDER_MAX_FRAMES 500
+
 static uint MaxFrame      = 0;
 static float CurrentFrame = 0;
 static i16 *CurrentStream = 0;
 static real Volume        = 1;
 static float SampleSpeed  = 1;
+
+static float RenderingFrames[RENDER_MAX_FRAMES];
 
 u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
@@ -39,6 +43,10 @@ u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 		if (CurrentFrame >= (float)MaxFrame) {
 			CurrentFrame = fmodf(CurrentFrame, (float)MaxFrame);
 		}
+
+		// This is very very slow!!! Optimize!!!
+		memmove(RenderingFrames, RenderingFrames + 1, sizeof(float) * (RENDER_MAX_FRAMES - 1));
+		RenderingFrames[RENDER_MAX_FRAMES-1] = 0.5f * (l + r);
 	}
 
 	return count;
@@ -149,6 +157,12 @@ void HandleEvent(const KrEvent *event, void *user) {
 		if (event->Key.Code == KrKey_F11) {
 			KrWindow_ToggleFullscreen();
 		}
+
+		if (event->Key.Code == KrKey_Plus) {
+			SampleSpeed *= 2.0f;
+		} else if (event->Key.Code == KrKey_Minus) {
+			SampleSpeed *= 0.5f;
+		}
 		
 		if (event->Key.Code >= KrKey_0 && event->Key.Code <= KrKey_9) {
 			uint i = event->Key.Code - KrKey_0;
@@ -167,7 +181,54 @@ void HandleEvent(const KrEvent *event, void *user) {
 	}
 }
 
-void Update(void *data) {
+typedef struct Color {
+	float m[4];
+} Color;
+
+Color Mix(Color a, Color b, float t) {
+	Color r;
+	for (int i = 0; i < 4; ++i) {
+		r.m[i] = (1.0f - t) * a.m[i] + t * b.m[i];
+	}
+	return r;
+}
+
+// TODO: cleanup this mess
+proc void PL_DrawRect(float x, float y, float w, float h, float color0[4], float color1[4]);
+
+void Update(float w, float h, void *data) {
+	const float PaddingX = 50.0f;
+	const float PaddingY = 100.0f;
+
+	w -= PaddingX * 2;
+	h -= PaddingY * 2;
+	h /= 2;
+
+	float x = PaddingX;
+	float y = PaddingY + h;
+
+	float d = w / (float)RENDER_MAX_FRAMES;
+
+	Color base  = { 1.0f, 1.0f, 0.0f, 1.0f };
+	Color highy = { 1.0f, 0.0f, 0.0f, 1.0f };
+	Color highx = { 0.0f, 1.0f, 0.0f, 1.0f };
+
+	for (i32 index = 0; index < RENDER_MAX_FRAMES; ++index) {
+		float val = RenderingFrames[index];
+
+		float midx = (float)index / (float)RENDER_MAX_FRAMES;
+		float midy = fabsf(val);
+		Color basex = Mix(base, highx, midx);
+		Color midcolor = Mix(basex, highy, midy);
+		
+		if (val >= 0.0f) {
+			PL_DrawRect(x, y, d, val * h, base.m, midcolor.m);
+		} else {
+			PL_DrawRect(x, y + val * h, d, -val * h, base.m, midcolor.m);
+		}
+
+		x += d;
+	}
 }
 
 int Main(int argc, char **argv, KrUserContext *ctx) {

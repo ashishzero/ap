@@ -159,7 +159,7 @@ const char *KrEvent_GetName(KrEventKind kind);
 //
 
 typedef void (*KrEventProc)(const KrEvent *event, void *user);
-typedef void (*KrUpdateProc)(void *user);
+typedef void (*KrUpdateProc)(float w, float h, void *user);
 typedef u32  (*KrUploadAudioProc)(const KrAudioSpec *spec, u8 *data, u32 count, void *user);
 
 typedef struct KrUserContext {
