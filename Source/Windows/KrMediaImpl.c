@@ -1311,25 +1311,32 @@ static float                   g_MainRenderTargetHeight;
 
 static PL_Render2d             g_Render2d;
 
-proc void PL_DrawRect(float x, float y, float w, float h, float color0[4], float color1[4]) {
+proc void PL_DrawQuad(float p0[2], float p1[2], float p2[2], float p3[2], float color0[4], float color1[4], float color2[4], float color3[4]) {
 	if (g_Render2d.MappedVertexPos + 4 < PL_MAX_VERTICES &&
 		g_Render2d.MappedIndexPos + 6 < PL_MAX_INDICES) {
 		PL_Vertex2d *vtx = g_Render2d.MappedVertex + g_Render2d.MappedVertexPos;
-		vtx->Position[0] = x; vtx->Position[1] = y; vtx->Position[2] = 0;
+		memcpy(vtx->Position, p0, sizeof(float) * 2);
+		vtx->Position[2] = 0;
 		vtx->TexCoord[0] = 0; vtx->TexCoord[1] = 0;
-		vtx->Color[0] = color0[0]; vtx->Color[1] = color0[1]; vtx->Color[2] = color0[2]; vtx->Color[3] = color0[3];
+		memcpy(vtx->Color, color0, sizeof(float) * 4);
+
 		vtx += 1;
-		vtx->Position[0] = x + w; vtx->Position[1] = y; vtx->Position[2] = 0;
+		memcpy(vtx->Position, p1, sizeof(float) * 2);
+		vtx->Position[2] = 0;
 		vtx->TexCoord[0] = 0; vtx->TexCoord[1] = 0;
-		vtx->Color[0] = color0[0]; vtx->Color[1] = color0[1]; vtx->Color[2] = color0[2]; vtx->Color[3] = color0[3];
+		memcpy(vtx->Color, color1, sizeof(float) * 4);
+
 		vtx += 1;
-		vtx->Position[0] = x + w; vtx->Position[1] = y + h; vtx->Position[2] = 0;
+		memcpy(vtx->Position, p2, sizeof(float) * 2);
+		vtx->Position[2] = 0;
 		vtx->TexCoord[0] = 0; vtx->TexCoord[1] = 0;
-		vtx->Color[0] = color1[0]; vtx->Color[1] = color1[1]; vtx->Color[2] = color1[2]; vtx->Color[3] = color1[3];
+		memcpy(vtx->Color, color2, sizeof(float) * 4);
+
 		vtx += 1;
-		vtx->Position[0] = x; vtx->Position[1] = y + h; vtx->Position[2] = 0;
+		memcpy(vtx->Position, p3, sizeof(float) * 2);
+		vtx->Position[2] = 0;
 		vtx->TexCoord[0] = 0; vtx->TexCoord[1] = 0;
-		vtx->Color[0] = color1[0]; vtx->Color[1] = color1[1]; vtx->Color[2] = color1[2]; vtx->Color[3] = color1[3];
+		memcpy(vtx->Color, color3, sizeof(float) * 4);
 		g_Render2d.MappedVertexPos += 4;
 
 		u32 *idx = g_Render2d.MappedIndex + g_Render2d.MappedIndexPos;
@@ -1338,6 +1345,14 @@ proc void PL_DrawRect(float x, float y, float w, float h, float color0[4], float
 		g_Render2d.MappedIndexPos += 6;
 		g_Render2d.NextIndex += 4;
 	}
+}
+
+proc void PL_DrawRect(float x, float y, float w, float h, float color0[4], float color1[4]) {
+	float p0[] = {x, y};
+	float p1[] = {x+w, y};
+	float p2[] = {x+w, y+h};
+	float p3[] = {x, y+h};
+	PL_DrawQuad(p0, p1, p2, p3, color0, color1, color1, color0);
 }
 
 inproc void PL_BeginRender2d() {

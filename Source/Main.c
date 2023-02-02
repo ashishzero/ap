@@ -190,7 +190,28 @@ float Lerp(float a, float b, float t) {
 	return (1.0f - t) * a + t * b;
 }
 
+typedef struct Quad {
+	float p0[2];
+	float p1[2];
+	float p2[2];
+	float p3[2];
+} Quad;
+
+Quad LerpQuad(Quad a, Quad b, float t) {
+	Quad r;
+	r.p0[0] = Lerp(a.p0[0], b.p0[0], t);
+	r.p0[1] = Lerp(a.p0[1], b.p0[1], t);
+	r.p1[0] = Lerp(a.p1[0], b.p1[0], t);
+	r.p1[1] = Lerp(a.p1[1], b.p1[1], t);
+	r.p2[0] = Lerp(a.p2[0], b.p2[0], t);
+	r.p2[1] = Lerp(a.p2[1], b.p2[1], t);
+	r.p3[0] = Lerp(a.p3[0], b.p3[0], t);
+	r.p3[1] = Lerp(a.p3[1], b.p3[1], t);
+	return r;
+}
+
 // TODO: cleanup this mess
+proc void PL_DrawQuad(float p0[2], float p1[2], float p2[2], float p3[2], float color0[4], float color1[4], float color2[4], float color3[4]);
 proc void PL_DrawRect(float x, float y, float w, float h, float color0[4], float color1[4]);
 
 static float RenderingFrames[RENDER_MAX_FRAMES];
@@ -261,6 +282,73 @@ void Update(float w, float h, void *data) {
 
 	PL_DrawRect(progress_x, progress_y, progress_w, progress_h, progress_bg, progress_bg);
 	PL_DrawRect(progress_x, progress_y, progress, progress_h, progress_fg, progress_fg);
+
+#define BUTTON_HALF_DIM  25.0F
+
+	float button_x = PaddingX + w * 0.5f - BUTTON_HALF_DIM;
+	float button_y = progress_y + progress_h + 15.0f;
+
+	static Quad PauseButtonQuads[2] = {
+		{
+			.p0 = {0, 0},
+			.p1 = {BUTTON_HALF_DIM-5.0f, 0},
+			.p2 = {BUTTON_HALF_DIM-5.0f, 2.0f*BUTTON_HALF_DIM},
+			.p3 = {0, 2.0f*BUTTON_HALF_DIM}
+		},
+		{
+			.p0 = {BUTTON_HALF_DIM+5.0f, 0},
+			.p1 = {2.0f*BUTTON_HALF_DIM, 0},
+			.p2 = {2.0f*BUTTON_HALF_DIM, 2.0f*BUTTON_HALF_DIM},
+			.p3 = {BUTTON_HALF_DIM+5.0f, 2.0f*BUTTON_HALF_DIM}
+		}
+	};
+
+	static Quad PlayButtonQuads[2] = {
+		{
+			.p0 = {0, 2.0f*BUTTON_HALF_DIM},
+			.p1 = {0, 0},
+			.p2 = {2.0f*BUTTON_HALF_DIM, BUTTON_HALF_DIM},
+			.p3 = {2.0f*BUTTON_HALF_DIM, BUTTON_HALF_DIM}
+		},
+		{
+			.p0 = {0, 2.0f*BUTTON_HALF_DIM},
+			.p1 = {0, 0},
+			.p2 = {2.0f*BUTTON_HALF_DIM, BUTTON_HALF_DIM},
+			.p3 = {2.0f*BUTTON_HALF_DIM, BUTTON_HALF_DIM}
+		}
+	};
+
+	static Quad ButtonQuads[2];
+
+	if (KrAudio_IsPlaying()) {
+		for (int i = 0; i < 2; ++i) {
+			ButtonQuads[i] = LerpQuad(ButtonQuads[i], PauseButtonQuads[i], 0.1f);
+		}
+	} else {
+		for (int i = 0; i < 2; ++i) {
+			ButtonQuads[i] = LerpQuad(ButtonQuads[i], PlayButtonQuads[i], 0.1f);
+		}
+	}
+
+	for (int i = 0; i < 2; ++i) {
+		Quad r = ButtonQuads[i];
+		r.p0[0] = button_x + r.p0[0];
+		r.p0[1] = button_y + r.p0[1];
+		r.p1[0] = button_x + r.p1[0];
+		r.p1[1] = button_y + r.p1[1];
+		r.p2[0] = button_x + r.p2[0];
+		r.p2[1] = button_y + r.p2[1];
+		r.p3[0] = button_x + r.p3[0];
+		r.p3[1] = button_y + r.p3[1];
+		PL_DrawQuad(r.p0, r.p1, r.p2, r.p3, progress_fg, progress_fg, progress_fg, progress_fg);
+	}
+
+	
+	//PL_DrawRect(button_x, button_y, button_w, button_h, progress_fg, progress_fg);
+	//PL_DrawRect(button_x + button_w + pause_button_gap, button_y, button_w, button_h, progress_fg, progress_fg);
+
+	//PL_DrawQuad(pause_button0.p0, pause_button0.p1, pause_button0.p2, pause_button0.p3, progress_fg, progress_fg, progress_fg, progress_fg);
+	//PL_DrawQuad(pause_button1.p0, pause_button1.p1, pause_button1.p2, pause_button1.p3, progress_fg, progress_fg, progress_fg, progress_fg);
 }
 
 int Main(int argc, char **argv, KrUserContext *ctx) {
