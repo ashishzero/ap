@@ -1258,8 +1258,8 @@ static const bool EnableDxDebug = true;
 static const bool EnableDxDebug = false;
 #endif
 
-static const uint PL_MAX_VERTICES = 4 * 50000;
-static const uint PL_MAX_INDICES  = 6 * 50000;
+static const uint PL_MAX_VERTICES = 4 * 100000;
+static const uint PL_MAX_INDICES  = 6 * 100000;
 
 typedef struct PL_Vertex2d {
 	float Position[3];

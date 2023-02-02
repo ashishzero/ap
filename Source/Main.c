@@ -13,7 +13,7 @@ static i16 *CurrentStream = 0;
 static real Volume        = 1;
 static float SampleSpeed  = 1;
 
-static float RenderingFrames[RENDER_MAX_FRAMES];
+//static float RenderingFrames[RENDER_MAX_FRAMES];
 
 u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
@@ -45,8 +45,8 @@ u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 		}
 
 		// This is very very slow!!! Optimize!!!
-		memmove(RenderingFrames, RenderingFrames + 1, sizeof(float) * (RENDER_MAX_FRAMES - 1));
-		RenderingFrames[RENDER_MAX_FRAMES-1] = 0.5f * (l + r);
+		//memmove(RenderingFrames, RenderingFrames + 1, sizeof(float) * (RENDER_MAX_FRAMES - 1));
+		//RenderingFrames[RENDER_MAX_FRAMES-1] = 0.5f * (l + r);
 	}
 
 	return count;
@@ -193,12 +193,21 @@ Color Mix(Color a, Color b, float t) {
 	return r;
 }
 
+
+float Lerp(float a, float b, float t) {
+	return (1.0f - t) * a + t * b;
+}
+
 // TODO: cleanup this mess
 proc void PL_DrawRect(float x, float y, float w, float h, float color0[4], float color1[4]);
 
+static float RenderingFrames[RENDER_MAX_FRAMES];
+
 void Update(float w, float h, void *data) {
-	const float PaddingX = 50.0f;
-	const float PaddingY = 100.0f;
+	const float PaddingX  = 50.0f;
+	const float PaddingY  = 100.0f;
+	const float Gap       = 2.0f;
+	const float MinHeight = 2.0f;
 
 	w -= PaddingX * 2;
 	h -= PaddingY * 2;
@@ -208,10 +217,26 @@ void Update(float w, float h, void *data) {
 	float y = PaddingY + h;
 
 	float d = w / (float)RENDER_MAX_FRAMES;
+	float g = d - Gap;
 
 	Color base  = { 1.0f, 1.0f, 0.0f, 1.0f };
 	Color highy = { 1.0f, 0.0f, 0.0f, 1.0f };
 	Color highx = { 0.0f, 1.0f, 0.0f, 1.0f };
+
+	u32 frame_pos = (uint)CurrentFrame;
+
+	for (i32 index = 0; index < RENDER_MAX_FRAMES; ++index) {
+		float l = (float)CurrentStream[frame_pos * 2 + 0] / 32767.0f;
+		float r = (float)CurrentStream[frame_pos * 2 + 1] / 32767.0f;
+		float val = 0.5f * (l + r);
+
+		RenderingFrames[index] = Lerp(RenderingFrames[index], val, 0.2f);
+
+		frame_pos += 1;
+		if (frame_pos >= MaxFrame) {
+			frame_pos = 0;
+		}
+	}
 
 	for (i32 index = 0; index < RENDER_MAX_FRAMES; ++index) {
 		float val = RenderingFrames[index];
@@ -222,9 +247,11 @@ void Update(float w, float h, void *data) {
 		Color midcolor = Mix(basex, highy, midy);
 		
 		if (val >= 0.0f) {
-			PL_DrawRect(x, y, d, val * h, base.m, midcolor.m);
+			float render_h = val * h + MinHeight * 2;
+			PL_DrawRect(x, y - MinHeight, g, render_h, base.m, midcolor.m);
 		} else {
-			PL_DrawRect(x, y + val * h, d, -val * h, base.m, midcolor.m);
+			float render_h = -val * h + MinHeight;
+			PL_DrawRect(x, y - render_h, g, render_h + MinHeight, base.m, midcolor.m);
 		}
 
 		x += d;
