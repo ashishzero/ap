@@ -5,15 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define RENDER_MAX_FRAMES 500
+#define RENDER_MAX_FRAMES 512
 
 static uint MaxFrame      = 0;
 static float CurrentFrame = 0;
 static i16 *CurrentStream = 0;
 static real Volume        = 1;
 static float SampleSpeed  = 1;
-
-//static float RenderingFrames[RENDER_MAX_FRAMES];
 
 u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
@@ -43,10 +41,6 @@ u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 		if (CurrentFrame >= (float)MaxFrame) {
 			CurrentFrame = fmodf(CurrentFrame, (float)MaxFrame);
 		}
-
-		// This is very very slow!!! Optimize!!!
-		//memmove(RenderingFrames, RenderingFrames + 1, sizeof(float) * (RENDER_MAX_FRAMES - 1));
-		//RenderingFrames[RENDER_MAX_FRAMES-1] = 0.5f * (l + r);
 	}
 
 	return count;
@@ -129,8 +123,6 @@ i16 *Serialize(Audio_Stream *audio, uint *count) {
 }
 
 void HandleEvent(const KrEvent *event, void *user) {
-	//printf("Event: %s\n", KrEvent_GetName(event->Kind));
-
 	if (event->Kind == KrEvent_Startup) {
 		KrAudio_Update();
 		KrAudio_Resume();
@@ -206,7 +198,7 @@ static float RenderingFrames[RENDER_MAX_FRAMES];
 void Update(float w, float h, void *data) {
 	const float PaddingX  = 50.0f;
 	const float PaddingY  = 100.0f;
-	const float Gap       = 2.0f;
+	const float Gap       = 1.0f;
 	const float MinHeight = 2.0f;
 
 	w -= PaddingX * 2;
@@ -256,6 +248,19 @@ void Update(float w, float h, void *data) {
 
 		x += d;
 	}
+
+	float progress_x = PaddingX;
+	float progress_y = 20.0f;
+	float progress_w = w;
+	float progress_h = 10.0f;
+
+	float progress   = (progress_w * CurrentFrame) / (float)MaxFrame;
+
+	float progress_bg[] = {0.0f, 0.0f, 0.0f, 1.0f};
+	float progress_fg[] = {1.0f, 1.0f, 1.0f, 1.0f};
+
+	PL_DrawRect(progress_x, progress_y, progress_w, progress_h, progress_bg, progress_bg);
+	PL_DrawRect(progress_x, progress_y, progress, progress_h, progress_fg, progress_fg);
 }
 
 int Main(int argc, char **argv, KrUserContext *ctx) {
