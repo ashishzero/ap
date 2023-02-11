@@ -89,7 +89,7 @@
     <ClCompile Include="Source\Windows\KrMediaImpl.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="resource.h" />
+    <ClInclude Include="Resource.h" />
     <ClInclude Include="Source\KrMedia.h" />
     <ClInclude Include="Source\KrMediaImpl.h" />
     <ClInclude Include="Source\KrPlatform.h" />

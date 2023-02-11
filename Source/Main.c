@@ -368,178 +368,133 @@ void Update(float w, float h, void *data) {
 	//PL_DrawQuad(pause_button1.p0, pause_button1.p1, pause_button1.p2, pause_button1.p3, progress_fg, progress_fg, progress_fg, progress_fg);
 }
 
-#define M_TAU_F 6.28318531f
+#define MATH_PI    3.14159265359
+#define MATH_TAU   6.28318530718
 
 typedef struct Complex {
-	float r, i;
+	real re;
+	real im;
 } Complex;
 
-Complex CAdd(Complex a, Complex b) {
-	return  (Complex) { .r = a.r + b.r, .i = a.i + b.i };
-}
-
-Complex CSub(Complex a, Complex b) {
-	return  (Complex) { .r = a.r - b.r, .i = a.i - b.i };
-}
-
-Complex CMul(Complex a, Complex b) {
-	return (Complex) { .r = a.r * b.r - a.i * b.i, .i = a.r * b.i + a.i * b.r };
-}
-
-Complex CEuler(float e) {
+Complex ComplexAdd(Complex a, Complex b) {
 	return (Complex) {
-		.r = cosf(e),
-			.i = sinf(e)
+		.re = a.re + b.re,
+		.im = a.im + b.im
 	};
 }
 
-uint BitLength(uint number) {
-	uint result = 0;
-	while (number) {
-		number = number >> 1;
-		result += 1;
-	}
-	return result - 1;
+Complex ComplexSub(Complex a, Complex b) {
+	return (Complex) {
+		.re = a.re - b.re,
+		.im = a.im - b.im
+	};
 }
 
-uint ReverseBits(uint number, uint bits) {
-	uint reverse = 0;
-	for (; number; number = number >> 1) {
-		reverse = (reverse << 1) | (number & 1);
-		bits -= 1;
-	}
-	reverse = reverse << bits;
-	return reverse;
+Complex ComplexMul(Complex a, Complex b) {
+	return (Complex) {
+		.re = a.re * b.re - a.im * b.im,
+		.im = a.re * b.im + a.im * b.re
+	};
 }
 
-void BitReversePermutation(Complex *x, uint count) {
-	uint bits = BitLength(count);
-
-	uint max = (count >> 1);
-	for (uint index = 1; index < max; ++index) {
-		uint reverse = ReverseBits(index, bits);
-		Complex y = x[index];
-		x[index] = x[reverse];
-		x[reverse] = y;
-	}
+Complex ComplexPolar(real e) {
+	return (Complex) {
+		.re = cosf(e),
+		.im = sinf(e)
+	};
 }
 
-#if 0
-void FFTRecursive(Complex *output, Complex *input, uint count) {
-	Assert(count > 1);
+Complex ComplexRect(real re, real im) {
+	return (Complex) {
+		.re = re,
+		.im = im
+	};
+}
 
-	if (count == 2) {
-		output[0] = CAdd(input[0], input[1]);
-		output[1] = CSub(input[0], input[1]);
-		return;
-	}
+void FFTRearrangeBitReversed(Complex *output, Complex *input, uint count) {
+	uint target = 0;
+	for (uint pos = 0; pos < count; ++pos) {
+		output[pos] = input[target];
 
-	float twid = -M_TAU_F / (float)count;
-
-	count >>= 1;
-
-	FFTRecursive(output, input, count);
-	FFTRecursive(output + count, input + count, count);
-
-	uint k0 = 0;
-	uint k1 = count;
-
-	for (uint k = 0; k < count; ++k) {
-		Complex w = CEuler(twid * (float)k);
-		Complex p = output[k0];
-		Complex q = CMul(w, output[k1]);
-		output[k0] = CAdd(p, q);
-		output[k1] = CSub(p, q);
-
-		k0 += 1;
-		k1 += 1;
+		uint mask = count;
+		while (target & (mask >>= 1)) {
+			target &= ~mask;
+		}
+		target |= mask;
 	}
 }
 
-void FFT(Complex *output, Complex *input, uint count) {
-	BitReversePermutation(input, count);
-	FFTRecursive(output, input, count);
+void FFTRearrangeBitReversedInplace(Complex *data, uint count) {
+	uint target = 0;
+	for (uint pos = 0; pos < count; ++pos) {
+		if (target > pos) {
+			Complex temp = data[pos];
+			data[pos]    = data[target];
+			data[target] = temp;
+		}
 
-	for (uint index = 0; index < count; ++index) {
-		printf("%f, %f\n", output[index].r, output[index].i);
+		uint mask = count;
+		while (target & (mask >>= 1)) {
+			target &= ~mask;
+		}
+		target |= mask;
 	}
 }
 
-#else
+void FFT(Complex *data, uint count) {
+	Assert((count & (count - 1)) == 0); // "count" MUST be power of 2
 
-bool IsPowerOf2(uint number) {
-	return (number & (number - 1)) == 0;
-}
-
-void FFTCopyBitReversed(Complex *dst, Complex *src, uint count) {
-	uint bits = BitLength(count);
-	uint max = (count >> 1);
-
-	for (uint index = 0; index < count; ++index) {
-		uint reverse = ReverseBits(index, bits);
-		dst[reverse] = src[index];
-	}
-}
-
-void FFT(Complex *output, Complex *input, uint count) {
-	Assert(IsPowerOf2(count));
-
-	FFTCopyBitReversed(output, input, count);
-
+#if 1
 	// radix = 2
 	for (uint index = 0; index < count; index += 2) {
-		Complex p = output[index + 0];
-		Complex q = output[index + 1];
-		output[index + 0] = CAdd(p, q);
-		output[index + 1] = CSub(p, q);
+		Complex p = data[index + 0];
+		Complex q = data[index + 1];
+		data[index + 0] = ComplexAdd(p, q);
+		data[index + 1] = ComplexSub(p, q);
 	}
 
 	// radix = 4
 	for (uint index = 0; index < count; index += 4) {
-		Complex p = output[index + 0];
-		Complex r = output[index + 1];
-		Complex q = output[index + 2];
-		Complex s = output[index + 3];
+		Complex p = data[index + 0];
+		Complex r = data[index + 1];
+		Complex q = data[index + 2];
+		Complex s = data[index + 3];
 
-		s = (Complex) { s.i, -s.r };
+		s = (Complex) { s.im, -s.re };
 
-		output[index + 0] = CAdd(p, q);
-		output[index + 1] = CAdd(r, s);
-		output[index + 2] = CSub(p, q);
-		output[index + 3] = CSub(r, s);
+		data[index + 0] = ComplexAdd(p, q);
+		data[index + 1] = ComplexAdd(r, s);
+		data[index + 2] = ComplexSub(p, q);
+		data[index + 3] = ComplexSub(r, s);
 	}
-
-	uint division = 4;
-	for (uint radix = 8; radix <= count; radix = radix << 1) {
-		float twid = -M_TAU_F / (float)radix;
-
-		for (uint first = 0; first < count; first += radix) {
-			for (uint index = 0; index < division; ++index) {
-				uint idx0 = first + index;
-				uint idx1 = idx0 + division;
-				Complex w = CEuler(twid * (float)index); // @Todo: Cache these values
-				Complex p = output[idx0];
-				Complex q = CMul(w, output[idx1]);
-				output[idx0] = CAdd(p, q);
-				output[idx1] = CSub(p, q);
-			}
-		}
-
-		division = division << 1;
-	}
-}
 #endif
 
+	for (uint step = 4; step < count; step <<= 1) {
+		uint jump  = step << 1;
+		Complex tw = ComplexPolar((float)(-MATH_PI / (double)(step)));
+		Complex w  = ComplexRect(1.0f, 0.0f);
+		for (uint block = 0; block < step; ++block) {
+			for (uint index = block; index < count; index += jump) {
+				uint next   = index + step;
+				Complex a   = data[index];
+				Complex b   = ComplexMul(w, data[next]);
+				data[index] = ComplexAdd(a, b);
+				data[next]  = ComplexSub(a, b);
+			}
+			w = ComplexMul(w, tw);
+		}
+	}
+}
+
 int Main(int argc, char **argv, KrUserContext *ctx) {
-	Complex input[] = { {2},{1},{-1},{5},{0},{3},{0},{-4} };
-	Complex output[8];
+	Complex data[] = { {2},{1},{-1},{5},{0},{3},{0},{-4} };
+	//Complex output[8];
 
-	memset(output, 0, sizeof(output));
+	FFTRearrangeBitReversedInplace(data, ArrayCount(data));
+	FFT(data, ArrayCount(data));
 
-	FFT(output, input, ArrayCount(input));
-
-	for (uint index = 0; index < ArrayCount(output); ++index) {
-		printf("%f, %f\n", output[index].r, output[index].i);
+	for (uint index = 0; index < ArrayCount(data); ++index) {
+		printf("%f, %f\n", data[index].re, data[index].im);
 	}
 
 	if (argc <= 1) {
