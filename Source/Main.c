@@ -441,8 +441,18 @@ void FFTRearrangeBitReversedInplace(Complex *data, uint count) {
 	}
 }
 
+#include "TwiddleFactor.h"
+
+Complex TwiddleFactor(uint half_turns) {
+	if (half_turns < ArrayCount(TwiddleFactors)) {
+		uint index = half_turns << 1;
+		return ComplexRect(TwiddleFactors[index], TwiddleFactors[index + 1]);
+	}
+	return ComplexPolar((float)(-MATH_PI / (double)(half_turns)));
+}
+
 void FFT(Complex *data, uint count) {
-	Assert((count & (count - 1)) == 0); // "count" MUST be power of 2
+	Assert((count & (count - 1)) == 0);
 
 #if 1
 	// radix = 2
@@ -471,7 +481,7 @@ void FFT(Complex *data, uint count) {
 
 	for (uint step = 4; step < count; step <<= 1) {
 		uint jump  = step << 1;
-		Complex tw = ComplexPolar((float)(-MATH_PI / (double)(step)));
+		Complex tw = TwiddleFactor(step);
 		Complex w  = ComplexRect(1.0f, 0.0f);
 		for (uint block = 0; block < step; ++block) {
 			for (uint index = block; index < count; index += jump) {
@@ -485,6 +495,33 @@ void FFT(Complex *data, uint count) {
 		}
 	}
 }
+
+//void CalculateTiddleMatrix() {
+//	FILE *out = fopen("Source/TwiddleFactor.h", "wb");
+//	printf("===================================================\n");
+//
+//	int size = 65536;
+//
+//	fprintf(out, "static const float TwiddleFactors[] = {\n");
+//
+//	for (int j = 0; j < size; ++j) {
+//		Complex c;
+//		if (j == 0) {
+//			c = (Complex){0,0};
+//		} else {
+//			float angle = (float)(-(MATH_PI) / (double)j);
+//			c = ComplexPolar(angle);
+//		}
+//		fprintf(out, "%ff, %ff, ", c.re, c.im);
+//		if (((j + 1) & 3) == 0)
+//			fprintf(out, "\n");
+//	}
+//
+//	fprintf(out, "};\n");
+//
+//	printf("===================================================\n");
+//	fclose(out);
+//}
 
 int Main(int argc, char **argv, KrUserContext *ctx) {
 	Complex data[] = { {2},{1},{-1},{5},{0},{3},{0},{-4} };
