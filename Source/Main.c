@@ -368,171 +368,34 @@ void Update(float w, float h, void *data) {
 	//PL_DrawQuad(pause_button1.p0, pause_button1.p1, pause_button1.p2, pause_button1.p3, progress_fg, progress_fg, progress_fg, progress_fg);
 }
 
-#define MATH_PI    3.14159265359
-#define MATH_TAU   6.28318530718
-
-typedef struct Complex {
-	real re;
-	real im;
-} Complex;
-
-Complex ComplexAdd(Complex a, Complex b) {
-	return (Complex) {
-		.re = a.re + b.re,
-		.im = a.im + b.im
-	};
-}
-
-Complex ComplexSub(Complex a, Complex b) {
-	return (Complex) {
-		.re = a.re - b.re,
-		.im = a.im - b.im
-	};
-}
-
-Complex ComplexMul(Complex a, Complex b) {
-	return (Complex) {
-		.re = a.re * b.re - a.im * b.im,
-		.im = a.re * b.im + a.im * b.re
-	};
-}
-
-Complex ComplexPolar(real e) {
-	return (Complex) {
-		.re = cosf(e),
-		.im = sinf(e)
-	};
-}
-
-Complex ComplexRect(real re, real im) {
-	return (Complex) {
-		.re = re,
-		.im = im
-	};
-}
-
-void FFTRearrangeBitReversed(Complex *output, Complex *input, uint count) {
-	uint target = 0;
-	for (uint pos = 0; pos < count; ++pos) {
-		output[pos] = input[target];
-
-		uint mask = count;
-		while (target & (mask >>= 1)) {
-			target &= ~mask;
-		}
-		target |= mask;
-	}
-}
-
-void FFTRearrangeBitReversedInplace(Complex *data, uint count) {
-	uint target = 0;
-	for (uint pos = 0; pos < count; ++pos) {
-		if (target > pos) {
-			Complex temp = data[pos];
-			data[pos]    = data[target];
-			data[target] = temp;
-		}
-
-		uint mask = count;
-		while (target & (mask >>= 1)) {
-			target &= ~mask;
-		}
-		target |= mask;
-	}
-}
-
-#include "TwiddleFactor.h"
-
-Complex TwiddleFactor(uint half_turns) {
-	if (half_turns < ArrayCount(TwiddleFactors)) {
-		uint index = half_turns << 1;
-		return ComplexRect(TwiddleFactors[index], TwiddleFactors[index + 1]);
-	}
-	return ComplexPolar((float)(-MATH_PI / (double)(half_turns)));
-}
-
-void FFT(Complex *data, uint count) {
-	Assert((count & (count - 1)) == 0);
-
-#if 1
-	// radix = 2
-	for (uint index = 0; index < count; index += 2) {
-		Complex p = data[index + 0];
-		Complex q = data[index + 1];
-		data[index + 0] = ComplexAdd(p, q);
-		data[index + 1] = ComplexSub(p, q);
-	}
-
-	// radix = 4
-	for (uint index = 0; index < count; index += 4) {
-		Complex p = data[index + 0];
-		Complex r = data[index + 1];
-		Complex q = data[index + 2];
-		Complex s = data[index + 3];
-
-		s = (Complex) { s.im, -s.re };
-
-		data[index + 0] = ComplexAdd(p, q);
-		data[index + 1] = ComplexAdd(r, s);
-		data[index + 2] = ComplexSub(p, q);
-		data[index + 3] = ComplexSub(r, s);
-	}
-#endif
-
-	for (uint step = 4; step < count; step <<= 1) {
-		uint jump  = step << 1;
-		Complex tw = TwiddleFactor(step);
-		Complex w  = ComplexRect(1.0f, 0.0f);
-		for (uint block = 0; block < step; ++block) {
-			for (uint index = block; index < count; index += jump) {
-				uint next   = index + step;
-				Complex a   = data[index];
-				Complex b   = ComplexMul(w, data[next]);
-				data[index] = ComplexAdd(a, b);
-				data[next]  = ComplexSub(a, b);
-			}
-			w = ComplexMul(w, tw);
-		}
-	}
-}
-
-//void CalculateTiddleMatrix() {
-//	FILE *out = fopen("Source/TwiddleFactor.h", "wb");
-//	printf("===================================================\n");
-//
-//	int size = 65536;
-//
-//	fprintf(out, "static const float TwiddleFactors[] = {\n");
-//
-//	for (int j = 0; j < size; ++j) {
-//		Complex c;
-//		if (j == 0) {
-//			c = (Complex){0,0};
-//		} else {
-//			float angle = (float)(-(MATH_PI) / (double)j);
-//			c = ComplexPolar(angle);
-//		}
-//		fprintf(out, "%ff, %ff, ", c.re, c.im);
-//		if (((j + 1) & 3) == 0)
-//			fprintf(out, "\n");
-//	}
-//
-//	fprintf(out, "};\n");
-//
-//	printf("===================================================\n");
-//	fclose(out);
-//}
+#include "FFT.h"
 
 int Main(int argc, char **argv, KrUserContext *ctx) {
 	Complex data[] = { {2},{1},{-1},{5},{0},{3},{0},{-4} };
-	//Complex output[8];
 
-	FFTRearrangeBitReversedInplace(data, ArrayCount(data));
-	FFT(data, ArrayCount(data));
+	printf("===============================================\n");
 
 	for (uint index = 0; index < ArrayCount(data); ++index) {
 		printf("%f, %f\n", data[index].re, data[index].im);
 	}
+
+	InplaceFFT(data, ArrayCount(data));
+
+	printf("===============================================\n");
+
+	for (uint index = 0; index < ArrayCount(data); ++index) {
+		printf("%f, %f\n", data[index].re, data[index].im);
+	}
+
+	printf("===============================================\n");
+
+	InplaceInvFFT(data, ArrayCount(data));
+
+	for (uint index = 0; index < ArrayCount(data); ++index) {
+		printf("%f, %f\n", data[index].re, data[index].im);
+	}
+
+	printf("===============================================\n");
 
 	if (argc <= 1) {
 		Usage(argv[0]);

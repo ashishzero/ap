@@ -24,6 +24,9 @@
     <ClCompile Include="Source\KrMedia.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Source\FFT.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Source\KrPlatform.h">
@@ -36,6 +39,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Resource.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\TwiddleFactorFFT.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\FFT.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

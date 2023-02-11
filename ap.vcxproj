@@ -84,15 +84,18 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Source\FFT.c" />
     <ClCompile Include="Source\KrMedia.c" />
     <ClCompile Include="Source\Main.c" />
     <ClCompile Include="Source\Windows\KrMediaImpl.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Resource.h" />
+    <ClInclude Include="Source\FFT.h" />
     <ClInclude Include="Source\KrMedia.h" />
     <ClInclude Include="Source\KrMediaImpl.h" />
     <ClInclude Include="Source\KrPlatform.h" />
+    <ClInclude Include="Source\TwiddleFactorFFT.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="KrResource.rc" />
