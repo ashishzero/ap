@@ -1355,6 +1355,14 @@ proc void PL_DrawRect(float x, float y, float w, float h, float color0[4], float
 	PL_DrawQuad(p0, p1, p2, p3, color0, color1, color1, color0);
 }
 
+proc void PL_DrawRectVert(float x, float y, float w, float h, float color0[4], float color1[4]) {
+	float p0[] = {x, y};
+	float p1[] = {x+w, y};
+	float p2[] = {x+w, y+h};
+	float p3[] = {x, y+h};
+	PL_DrawQuad(p0, p1, p2, p3, color0, color0, color1, color1);
+}
+
 inproc void PL_BeginRender2d() {
 	HRESULT hr;
 	D3D11_MAPPED_SUBRESOURCE mapped;
