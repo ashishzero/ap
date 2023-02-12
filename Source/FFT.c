@@ -9,35 +9,35 @@
 // Complex Number Utilities
 //
 
-static Complex ComplexAdd(Complex a, Complex b) {
+Complex ComplexAdd(Complex a, Complex b) {
 	return (Complex) {
 		.re = a.re + b.re,
 		.im = a.im + b.im
 	};
 }
 
-static Complex ComplexSub(Complex a, Complex b) {
+Complex ComplexSub(Complex a, Complex b) {
 	return (Complex) {
 		.re = a.re - b.re,
 		.im = a.im - b.im
 	};
 }
 
-static Complex ComplexMul(Complex a, Complex b) {
+Complex ComplexMul(Complex a, Complex b) {
 	return (Complex) {
 		.re = a.re * b.re - a.im * b.im,
 		.im = a.re * b.im + a.im * b.re
 	};
 }
 
-static Complex ComplexPolar(real e) {
+Complex ComplexPolar(real e) {
 	return (Complex) {
 		.re = cosf(e),
 		.im = sinf(e)
 	};
 }
 
-static Complex ComplexRect(real re, real im) {
+Complex ComplexRect(real re, real im) {
 	return (Complex) {
 		.re = re,
 		.im = im

@@ -1,4 +1,5 @@
 #include "KrMedia.h"
+#include "FFT.h"
 
 #include <stdio.h>
 #include <math.h>
@@ -7,17 +8,20 @@
 
 #define RENDER_MAX_FRAMES 512
 
-static uint MaxFrame = 0;
-static float CurrentFrame = 0;
-static i16 *CurrentStream = 0;
-static real CurrentVolume = 1;
-static float SampleSpeed = 1;
+static uint  MaxFrame      = 0;
+static float CurrentFrame  = 0;
+static i16 * CurrentStream = 0;
+static real  CurrentVolume = 1;
+static float SampleSpeed   = 1;
+
+static Complex FFTBuffer[16*1024];
 
 u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
 
 	umem size = count * spec->Channels;
 
+#if 1
 	r32 *samples = (r32 *)dst;
 	for (uint i = 0; i < size; i += spec->Channels) {
 		uint x = (uint)CurrentFrame;
@@ -42,6 +46,7 @@ u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 			CurrentFrame = fmodf(CurrentFrame, (float)MaxFrame);
 		}
 	}
+#endif
 
 	return count;
 }
@@ -213,13 +218,21 @@ proc void PL_DrawQuad(float p0[2], float p1[2], float p2[2], float p3[2], float 
 proc void PL_DrawRect(float x, float y, float w, float h, float color0[4], float color1[4]);
 proc void PL_DrawRectVert(float x, float y, float w, float h, float color0[4], float color1[4]);
 
-static float RenderingFrames[RENDER_MAX_FRAMES];
+#define RENDER_MAX_SPECTRUM 128
 
-void Update(float w, float h, void *data) {
+static float   RenderingFrames[RENDER_MAX_FRAMES];
+static float   SpectrumMagnitudes[RENDER_MAX_SPECTRUM];
+static float   SpectrumMagnitudesTarget[RENDER_MAX_SPECTRUM];
+static Complex SpectrumScratch[RENDER_MAX_SPECTRUM];
+
+void Update(float window_w, float window_h, void *data) {
 	const float PaddingX = 50.0f;
 	const float PaddingY = 100.0f;
 	const float Gap = 1.0f;
 	const float MinHeight = 2.0f;
+
+	float w = window_w;
+	float h = window_h;
 
 	w -= PaddingX * 2;
 	h -= PaddingY * 2;
@@ -235,7 +248,8 @@ void Update(float w, float h, void *data) {
 	Color highy = { 1.0f, 0.0f, 0.0f, 1.0f };
 	Color highx = { 0.0f, 1.0f, 0.0f, 1.0f };
 
-	u32 frame_pos = (uint)CurrentFrame;
+	u32 first_frame = (uint)CurrentFrame;
+	u32 frame_pos = first_frame;
 
 	for (i32 index = 0; index < RENDER_MAX_FRAMES; ++index) {
 		float l = (float)CurrentStream[frame_pos * 2 + 0] / 32767.0f;
@@ -248,6 +262,55 @@ void Update(float w, float h, void *data) {
 		if (frame_pos >= MaxFrame) {
 			frame_pos = 0;
 		}
+	}
+
+	frame_pos = first_frame;
+	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; index += 2) {
+		SpectrumScratch[index + 0] = ComplexRect(CurrentStream[frame_pos * 2 + 0], 0);
+		SpectrumScratch[index + 1] = ComplexRect(CurrentStream[frame_pos * 2 + 1], 0);
+
+		frame_pos += 1;
+		if (frame_pos >= MaxFrame) {
+			frame_pos = 0;
+		}
+	}
+
+	InplaceFFT(SpectrumScratch, ArrayCount(SpectrumScratch));
+
+	float max_spec_mag = 1.0f;
+
+	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
+		Complex z = SpectrumScratch[index];
+		float re2 = z.re * z.re;
+		float im2 = z.im * z.im;
+		SpectrumMagnitudesTarget[index] = sqrtf(re2 + im2);
+
+		max_spec_mag = Max(max_spec_mag, SpectrumMagnitudesTarget[index]);
+	}
+
+	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
+		SpectrumMagnitudesTarget[index] /= max_spec_mag;
+	}
+
+	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
+		SpectrumMagnitudes[index] = Lerp(SpectrumMagnitudes[index], SpectrumMagnitudesTarget[index], 0.2f);
+	}
+
+	float spec_color_a[] = { 1,1,0,1 };
+	float spec_color_b[] = { 1,0,0,1 };
+
+	float spec_g = 2.0f;
+	float spec_w = 5.0f;
+	float spec_x = 0.5f * (window_w - (spec_w + spec_g) * RENDER_MAX_SPECTRUM);
+	float spec_y = y + 0.4f * h;
+	float spec_min_height = 2.0f;
+	float spec_max_height = 150.0f;
+	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
+		float val = SpectrumMagnitudes[index];
+
+		float spec_h = val * spec_max_height;
+		PL_DrawRectVert(spec_x, spec_y, spec_w, spec_min_height + spec_h, spec_color_a, spec_color_b);
+		spec_x += (spec_w + spec_g);
 	}
 
 	for (i32 index = 0; index < RENDER_MAX_FRAMES; ++index) {
@@ -367,8 +430,6 @@ void Update(float w, float h, void *data) {
 	//PL_DrawQuad(pause_button0.p0, pause_button0.p1, pause_button0.p2, pause_button0.p3, progress_fg, progress_fg, progress_fg, progress_fg);
 	//PL_DrawQuad(pause_button1.p0, pause_button1.p1, pause_button1.p2, pause_button1.p3, progress_fg, progress_fg, progress_fg, progress_fg);
 }
-
-#include "FFT.h"
 
 int Main(int argc, char **argv, KrUserContext *ctx) {
 	Complex data[] = { {2},{1},{-1},{5},{0},{3},{0},{-4} };
