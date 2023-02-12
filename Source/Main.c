@@ -9,44 +9,95 @@
 #define RENDER_MAX_FRAMES 512
 
 static uint  MaxFrame      = 0;
-static float CurrentFrame  = 0;
+static uint  CurrentFrame  = 0;
 static i16 * CurrentStream = 0;
 static real  CurrentVolume = 1;
-static float SampleSpeed   = 1;
 
-static Complex FFTBuffer[16*1024];
+#define RENDER_MAX_SPECTRUM 1024
+#define FFT_MIN_FILTER      12
+#define FFT_MAX_FILTER      (RENDER_MAX_SPECTRUM-FFT_MIN_FILTER)
+
+static Complex FFTBuffer[RENDER_MAX_SPECTRUM];
+
+void ApplyLowPassFilter(Complex *values, uint count, uint threshold_freq) {
+	for (uint index = threshold_freq + 1; index < count; ++index) {
+		values[index] = ComplexRect(0, 0);
+	}
+}
+
+void ApplyHighPassFilter(Complex *values, uint count, uint threshold_freq) {
+	for (uint index = 0; index < threshold_freq; ++index) {
+		values[index] = ComplexRect(0, 0);
+	}
+}
+
+void ApplyBandPassFilter(Complex *values, uint count, uint threshold_a, uint threshold_b) {
+	for (uint index = 0; index < threshold_a; ++index) {
+		values[index] = ComplexRect(0, 0);
+	}
+	for (uint index = threshold_b + 1; index < count; ++index) {
+		values[index] = ComplexRect(0, 0);
+	}
+}
+
+float ComplexLenSq(Complex c) {
+	return c.re * c.re + c.im * c.im;
+}
+
+void ApplyTransformations(Complex *data, uint count) {
+	for (uint index = 10; index < count; ++index) {
+		//if ((index & 7) == 0) {
+			//data[index] = ComplexRect(0, 0);
+		//}
+	}
+
+	//float factor = 0.1f;
+	//for (uint index = 0; index < FFT_MIN_FILTER; ++index) {
+	//	float mag2 = ComplexLenSq(data[index]);
+	//	float mag  = factor / sqrtf(mag2);
+
+	//	data[index].re *= factor;
+	//	data[index].im *= factor;
+	//}
+
+	//for (uint index = FFT_MAX_FILTER; index < count; ++index) {
+	//	float mag2 = ComplexLenSq(data[index]);
+	//	float mag  = factor / sqrtf(mag2);
+
+	//	data[index].re *= factor;
+	//	data[index].im *= factor;
+	//}
+}
 
 u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
 
-	umem size = count * spec->Channels;
+	float *write_ptr  = (float *)dst;
+	uint sample_count = count * 2;
 
-#if 1
-	r32 *samples = (r32 *)dst;
-	for (uint i = 0; i < size; i += spec->Channels) {
-		uint x = (uint)CurrentFrame;
-		uint y = x + 1;
+	uint frame = CurrentFrame;
+	for (ptrdiff_t remaining = sample_count; remaining > 0; ) {
+		for (ptrdiff_t index = 0; index < ArrayCount(FFTBuffer); index += 2) {
+			FFTBuffer[index + 0] = ComplexRect((float)CurrentStream[frame * 2 + 0] / 32767.0f, 0);
+			FFTBuffer[index + 1] = ComplexRect((float)CurrentStream[frame * 2 + 1] / 32767.0f, 0);
 
-		float lx = (float)CurrentStream[x * spec->Channels + 0] / 32767.0f;
-		float ly = (float)CurrentStream[y * spec->Channels + 0] / 32767.0f;
-		float rx = (float)CurrentStream[x * spec->Channels + 1] / 32767.0f;
-		float ry = (float)CurrentStream[y * spec->Channels + 1] / 32767.0f;
-
-		float t = CurrentFrame - x;
-
-		float l = (1.0f - t) * lx + t * ly;
-		float r = (1.0f - t) * rx + t * ry;
-
-		samples[i + 0] = CurrentVolume * l;
-		samples[i + 1] = CurrentVolume * r;
-
-		CurrentFrame += SampleSpeed;
-
-		if (CurrentFrame >= (float)MaxFrame) {
-			CurrentFrame = fmodf(CurrentFrame, (float)MaxFrame);
+			frame = (frame + 1) % MaxFrame;
 		}
+
+		InplaceFFT(FFTBuffer, ArrayCount(FFTBuffer));
+		ApplyTransformations(FFTBuffer, ArrayCount(FFTBuffer));
+		InplaceInvFFT(FFTBuffer, ArrayCount(FFTBuffer));
+
+		ptrdiff_t write_count = Min(remaining, ArrayCount(FFTBuffer));
+		for (uint index = 0; index < write_count; index += 2) {
+			write_ptr[index + 0] = FFTBuffer[index + 0].re;
+			write_ptr[index + 1] = FFTBuffer[index + 1].re;
+		}
+		write_ptr += write_count;
+		remaining -= write_count;
 	}
-#endif
+
+	CurrentFrame = (CurrentFrame + count) % MaxFrame;
 
 	return count;
 }
@@ -137,8 +188,8 @@ void HandleEvent(const KrEvent *event, void *user) {
 		if (event->Key.Code == KrKey_Left || event->Key.Code == KrKey_Right) {
 			int direction = event->Key.Code == KrKey_Left ? -1 : 1;
 			int magnitude = event->Key.Repeat ? 5 : 10;
-			float next = CurrentFrame + (float)(direction * magnitude) * 48000;
-			next = Clamp(0.0f, (float)MaxFrame, next);
+			int next = CurrentFrame + (direction * magnitude) * 48000;
+			next = Clamp(0, (int)MaxFrame, next);
 			CurrentFrame = next;
 		}
 
@@ -163,15 +214,9 @@ void HandleEvent(const KrEvent *event, void *user) {
 			KrWindow_ToggleFullscreen();
 		}
 
-		if (event->Key.Code == KrKey_Plus) {
-			SampleSpeed *= 2.0f;
-		} else if (event->Key.Code == KrKey_Minus) {
-			SampleSpeed *= 0.5f;
-		}
-
 		if (event->Key.Code >= KrKey_0 && event->Key.Code <= KrKey_9) {
 			float fraction = (float)(event->Key.Code - KrKey_0) / 10.0f;
-			CurrentFrame = (float)lroundf(fraction * (float)MaxFrame);
+			CurrentFrame = (uint)lroundf(fraction * (float)MaxFrame);
 		}
 	}
 }
@@ -218,8 +263,6 @@ proc void PL_DrawQuad(float p0[2], float p1[2], float p2[2], float p3[2], float 
 proc void PL_DrawRect(float x, float y, float w, float h, float color0[4], float color1[4]);
 proc void PL_DrawRectVert(float x, float y, float w, float h, float color0[4], float color1[4]);
 
-#define RENDER_MAX_SPECTRUM 128
-
 static float   RenderingFrames[RENDER_MAX_FRAMES];
 static float   SpectrumMagnitudes[RENDER_MAX_SPECTRUM];
 static float   SpectrumMagnitudesTarget[RENDER_MAX_SPECTRUM];
@@ -239,12 +282,12 @@ void Update(float window_w, float window_h, void *data) {
 	h /= 2;
 
 	float x = PaddingX;
-	float y = PaddingY + h;
+	float y = PaddingY + h / 2;
 
 	float d = w / (float)RENDER_MAX_FRAMES;
 	float g = d - Gap;
 
-	Color base = { 1.0f, 1.0f, 0.0f, 1.0f };
+	Color base  = { 1.0f, 1.0f, 0.0f, 1.0f };
 	Color highy = { 1.0f, 0.0f, 0.0f, 1.0f };
 	Color highx = { 0.0f, 1.0f, 0.0f, 1.0f };
 
@@ -266,8 +309,8 @@ void Update(float window_w, float window_h, void *data) {
 
 	frame_pos = first_frame;
 	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; index += 2) {
-		SpectrumScratch[index + 0] = ComplexRect(CurrentStream[frame_pos * 2 + 0], 0);
-		SpectrumScratch[index + 1] = ComplexRect(CurrentStream[frame_pos * 2 + 1], 0);
+		SpectrumScratch[index + 0] = ComplexRect(CurrentStream[frame_pos * 2 + 0] / 32767.0f, 0);
+		SpectrumScratch[index + 1] = ComplexRect(CurrentStream[frame_pos * 2 + 1] / 32767.0f, 0);
 
 		frame_pos += 1;
 		if (frame_pos >= MaxFrame) {
@@ -276,8 +319,9 @@ void Update(float window_w, float window_h, void *data) {
 	}
 
 	InplaceFFT(SpectrumScratch, ArrayCount(SpectrumScratch));
+	ApplyTransformations(SpectrumScratch, ArrayCount(SpectrumScratch));
 
-	float max_spec_mag = 1.0f;
+	//float max_spec_mag = 1.0f;
 
 	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
 		Complex z = SpectrumScratch[index];
@@ -285,11 +329,13 @@ void Update(float window_w, float window_h, void *data) {
 		float im2 = z.im * z.im;
 		SpectrumMagnitudesTarget[index] = sqrtf(re2 + im2);
 
-		max_spec_mag = Max(max_spec_mag, SpectrumMagnitudesTarget[index]);
+		//max_spec_mag = Max(max_spec_mag, SpectrumMagnitudesTarget[index]);
 	}
 
+	//printf("Max: %f\n", max_spec_mag);
+
 	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
-		SpectrumMagnitudesTarget[index] /= max_spec_mag;
+		SpectrumMagnitudesTarget[index] = log10f(1.0f + SpectrumMagnitudesTarget[index]);
 	}
 
 	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
@@ -299,12 +345,12 @@ void Update(float window_w, float window_h, void *data) {
 	float spec_color_a[] = { 1,1,0,1 };
 	float spec_color_b[] = { 1,0,0,1 };
 
-	float spec_g = 2.0f;
-	float spec_w = 5.0f;
+	float spec_g = 0.2f;
+	float spec_w = 1.0f;
 	float spec_x = 0.5f * (window_w - (spec_w + spec_g) * RENDER_MAX_SPECTRUM);
 	float spec_y = y + 0.4f * h;
 	float spec_min_height = 2.0f;
-	float spec_max_height = 150.0f;
+	float spec_max_height = 100.0f;
 	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
 		float val = SpectrumMagnitudes[index];
 
@@ -432,6 +478,7 @@ void Update(float window_w, float window_h, void *data) {
 }
 
 int Main(int argc, char **argv, KrUserContext *ctx) {
+#if 0
 	Complex data[] = { {2},{1},{-1},{5},{0},{3},{0},{-4} };
 
 	printf("===============================================\n");
@@ -457,6 +504,7 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 	}
 
 	printf("===============================================\n");
+#endif
 
 	if (argc <= 1) {
 		Usage(argv[0]);
