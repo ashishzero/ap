@@ -12,9 +12,10 @@ static uint  MaxFrame      = 0;
 static uint  CurrentFrame  = 0;
 static i16 * CurrentStream = 0;
 static real  CurrentVolume = 1;
+static bool  Transform     = false;
 
 #define RENDER_MAX_SPECTRUM 1024
-#define FFT_MIN_FILTER      12
+#define FFT_MIN_FILTER      0
 #define FFT_MAX_FILTER      (RENDER_MAX_SPECTRUM-FFT_MIN_FILTER)
 
 static Complex FFTBuffer[RENDER_MAX_SPECTRUM];
@@ -45,41 +46,29 @@ float ComplexLenSq(Complex c) {
 }
 
 void ApplyTransformations(Complex *data, uint count) {
-	for (uint index = 10; index < count; ++index) {
-		//if ((index & 7) == 0) {
-			//data[index] = ComplexRect(0, 0);
-		//}
+	if (!Transform) return;
+	
+	for (uint index = 100; index < RENDER_MAX_SPECTRUM-100; ++index) {
+		data[index] = ComplexRect(0, 0);
 	}
 
-	//float factor = 0.1f;
-	//for (uint index = 0; index < FFT_MIN_FILTER; ++index) {
-	//	float mag2 = ComplexLenSq(data[index]);
-	//	float mag  = factor / sqrtf(mag2);
-
-	//	data[index].re *= factor;
-	//	data[index].im *= factor;
-	//}
-
-	//for (uint index = FFT_MAX_FILTER; index < count; ++index) {
-	//	float mag2 = ComplexLenSq(data[index]);
-	//	float mag  = factor / sqrtf(mag2);
-
-	//	data[index].re *= factor;
-	//	data[index].im *= factor;
-	//}
+	//ApplyHighPassFilter(data, count, 100);
+	//ApplyLowPassFilter(data, count, 1024-100);
 }
 
 u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
 
-	float *write_ptr  = (float *)dst;
 	uint sample_count = count * 2;
+	float *write_ptr  = (float *)dst;
+	float *last_ptr   = write_ptr + sample_count;
 
 	uint frame = CurrentFrame;
-	for (ptrdiff_t remaining = sample_count; remaining > 0; ) {
-		for (ptrdiff_t index = 0; index < ArrayCount(FFTBuffer); index += 2) {
+	while (write_ptr < last_ptr) {
+		// @Hack: Currently just working with 1 channel
+		for (ptrdiff_t index = 0; index < ArrayCount(FFTBuffer); index += 1) {
 			FFTBuffer[index + 0] = ComplexRect((float)CurrentStream[frame * 2 + 0] / 32767.0f, 0);
-			FFTBuffer[index + 1] = ComplexRect((float)CurrentStream[frame * 2 + 1] / 32767.0f, 0);
+			//FFTBuffer[index + 1] = ComplexRect((float)CurrentStream[frame * 2 + 1] / 32767.0f, 0);
 
 			frame = (frame + 1) % MaxFrame;
 		}
@@ -88,13 +77,11 @@ u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 		ApplyTransformations(FFTBuffer, ArrayCount(FFTBuffer));
 		InplaceInvFFT(FFTBuffer, ArrayCount(FFTBuffer));
 
-		ptrdiff_t write_count = Min(remaining, ArrayCount(FFTBuffer));
-		for (uint index = 0; index < write_count; index += 2) {
-			write_ptr[index + 0] = FFTBuffer[index + 0].re;
-			write_ptr[index + 1] = FFTBuffer[index + 1].re;
+		for (uint index = 0; write_ptr < last_ptr && index < ArrayCount(FFTBuffer); ++index) {
+			write_ptr[0] = FFTBuffer[index].re;
+			write_ptr[1] = FFTBuffer[index].re;
+			write_ptr += 2;
 		}
-		write_ptr += write_count;
-		remaining -= write_count;
 	}
 
 	CurrentFrame = (CurrentFrame + count) % MaxFrame;
@@ -210,6 +197,9 @@ void HandleEvent(const KrEvent *event, void *user) {
 				KrAudio_Resume();
 			}
 		}
+		if (event->Key.Code == KrKey_T) {
+			Transform = !Transform;
+		}
 		if (event->Key.Code == KrKey_F11) {
 			KrWindow_ToggleFullscreen();
 		}
@@ -266,6 +256,7 @@ proc void PL_DrawRectVert(float x, float y, float w, float h, float color0[4], f
 static float   RenderingFrames[RENDER_MAX_FRAMES];
 static float   SpectrumMagnitudes[RENDER_MAX_SPECTRUM];
 static float   SpectrumMagnitudesTarget[RENDER_MAX_SPECTRUM];
+static float   SpectrumMagnitudesTargetToShift[RENDER_MAX_SPECTRUM];
 static Complex SpectrumScratch[RENDER_MAX_SPECTRUM];
 
 void Update(float window_w, float window_h, void *data) {
@@ -308,9 +299,9 @@ void Update(float window_w, float window_h, void *data) {
 	}
 
 	frame_pos = first_frame;
-	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; index += 2) {
+	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; index += 1) {
 		SpectrumScratch[index + 0] = ComplexRect(CurrentStream[frame_pos * 2 + 0] / 32767.0f, 0);
-		SpectrumScratch[index + 1] = ComplexRect(CurrentStream[frame_pos * 2 + 1] / 32767.0f, 0);
+		//SpectrumScratch[index + 1] = ComplexRect(CurrentStream[frame_pos * 2 + 1] / 32767.0f, 0);
 
 		frame_pos += 1;
 		if (frame_pos >= MaxFrame) {
@@ -321,18 +312,27 @@ void Update(float window_w, float window_h, void *data) {
 	InplaceFFT(SpectrumScratch, ArrayCount(SpectrumScratch));
 	ApplyTransformations(SpectrumScratch, ArrayCount(SpectrumScratch));
 
-	//float max_spec_mag = 1.0f;
-
 	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
 		Complex z = SpectrumScratch[index];
 		float re2 = z.re * z.re;
 		float im2 = z.im * z.im;
-		SpectrumMagnitudesTarget[index] = sqrtf(re2 + im2);
-
-		//max_spec_mag = Max(max_spec_mag, SpectrumMagnitudesTarget[index]);
+		SpectrumMagnitudesTargetToShift[index] = sqrtf(re2 + im2);
 	}
 
-	//printf("Max: %f\n", max_spec_mag);
+	float max_spec_mag = -1.0f;
+	i32   max_spec_idx = -1;
+
+	for (uint index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
+		uint target = (index + RENDER_MAX_SPECTRUM/2) & (RENDER_MAX_SPECTRUM-1);
+		SpectrumMagnitudesTarget[target] = SpectrumMagnitudesTargetToShift[index];
+
+		if (max_spec_mag < SpectrumMagnitudesTarget[target]) {
+			max_spec_mag = SpectrumMagnitudesTarget[target];
+			max_spec_idx = target;
+		}
+	}
+
+	printf("Max: %d, %f\n", max_spec_idx - RENDER_MAX_SPECTRUM/2, max_spec_mag);
 
 	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
 		SpectrumMagnitudesTarget[index] = log10f(1.0f + SpectrumMagnitudesTarget[index]);
@@ -477,6 +477,30 @@ void Update(float window_w, float window_h, void *data) {
 	//PL_DrawQuad(pause_button1.p0, pause_button1.p1, pause_button1.p2, pause_button1.p3, progress_fg, progress_fg, progress_fg, progress_fg);
 }
 
+i16 *GenerateSineWave(float freq, uint *count) {
+	uint samples = 2 * 48000 / (uint)freq;
+
+	float dt = 1.0f / 48000.0f;
+
+	i16 *data = malloc(sizeof(i16) * samples);
+	memset(data, 0, sizeof(i16) * samples);
+
+	float t = 0;
+	for (uint i = 0; i < samples; i += 2) {
+		float s = 32767.0f * sinf(2.0f * 3.14f * freq * t);
+
+		i16 quantized = (i16)s;
+		data[i + 0] = quantized;
+		data[i + 1] = quantized;
+
+		t += dt;
+	}
+
+	*count = samples / 2;
+
+	return data;
+}
+
 int Main(int argc, char **argv, KrUserContext *ctx) {
 #if 0
 	Complex data[] = { {2},{1},{-1},{5},{0},{3},{0},{-4} };
@@ -517,6 +541,7 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 	Audio_Stream *audio = (Audio_Stream *)buff;
 
 	CurrentStream = Serialize(audio, &MaxFrame);
+	//CurrentStream = GenerateSineWave(60, &MaxFrame);
 
 	ctx->OnEvent = HandleEvent;
 	ctx->OnUpdate = Update;
