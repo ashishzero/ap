@@ -18,7 +18,9 @@ static bool  Transform     = false;
 #define FFT_MIN_FILTER      0
 #define FFT_MAX_FILTER      (RENDER_MAX_SPECTRUM-FFT_MIN_FILTER)
 
+static Complex ShiftedFFTBuffer[RENDER_MAX_SPECTRUM];
 static Complex FFTBuffer[RENDER_MAX_SPECTRUM];
+static Complex WindowBuffer[RENDER_MAX_SPECTRUM];
 
 void ApplyLowPassFilter(Complex *values, uint count, uint threshold_freq) {
 	for (uint index = threshold_freq + 1; index < count; ++index) {
@@ -45,12 +47,81 @@ float ComplexLenSq(Complex c) {
 	return c.re * c.re + c.im * c.im;
 }
 
-void ApplyTransformations(Complex *data, uint count) {
-	if (!Transform) return;
-	
-	for (uint index = 100; index < RENDER_MAX_SPECTRUM-100; ++index) {
-		data[index] = ComplexRect(0, 0);
+float PreApplyTransformations(Complex *data, uint count) {
+	if (!Transform) return 1.0f;
+
+	float sum = 0.0f;
+
+#if 1
+	// Blackman window
+	for (uint index = 0; index < count; ++index) {
+		float alpha = 0.16f;
+		float a0 = (1.0f - alpha) / 2.0f;
+		float a1 = 1.0f / 2.0f;
+		float a2 = alpha / 2.0f;
+		float div = (float)index / (float)count;
+		float window_x = a0 - a1 * cosf(2 * 3.14f * div) + a2 * cosf(4 * 3.14f * div);
+		data[index].re *= window_x;
+		sum += window_x;
 	}
+#endif
+
+#if 0
+	// Sine window
+	for (uint index = 0; index < count; ++index) {
+		float freq = 40.0f;
+		float div  = (float)index / (float)count;
+		float window_x = sinf(2.0f * 3.14f * freq * div);
+		data[index].re *= window_x;
+	}
+#endif
+
+#if 0
+	// Rect window
+	for (uint index = 0; index < count; ++index) {
+		float alpha = 0.16f;
+		data[index].re *= alpha;
+	}
+#endif
+
+	return sum;
+}
+
+void ApplyTransformations(Complex *data, uint count, uint first, uint max) {
+	if (!Transform) return;
+
+	#if 1
+	//for (uint i = 0; i < count; ++i) {
+	//	data[i] = ComplexMul(data[i], WindowBuffer[i]);
+	//}
+	#endif
+
+	//for (uint idx = 0; idx < count; idx += 2) {
+	//	data[idx] = ComplexRect(0, 0);
+	//}
+	//for (uint idx = 128; idx < count; ++idx) {
+	//	data[idx] = ComplexRect(0, 0);
+	//}
+
+	//for (int iter = 0; iter < 60; ++iter) {
+	//	float max_mag = 0.0f;
+	//	uint  max_idx = 0;
+
+	//	for (uint idx = 0; idx < RENDER_MAX_SPECTRUM; ++idx) {
+	//		float mag = ComplexLenSq(data[idx]);
+	//		if (mag > max_mag) {
+	//			max_mag = mag;
+	//			max_idx = idx;
+	//		}
+	//	}
+
+	//	data[max_idx] = ComplexRect(0, 0);
+	//}
+
+	
+	//for (uint index = 100; index < RENDER_MAX_SPECTRUM-100; ++index) {
+	//	data[index] = ComplexRect(0, 0);
+	//}
 
 	//ApplyHighPassFilter(data, count, 100);
 	//ApplyLowPassFilter(data, count, 1024-100);
@@ -66,25 +137,48 @@ u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
 	uint frame = CurrentFrame;
 	while (write_ptr < last_ptr) {
 		// @Hack: Currently just working with 1 channel
-		for (ptrdiff_t index = 0; index < ArrayCount(FFTBuffer); index += 1) {
+
+		memset(FFTBuffer, 0, sizeof(FFTBuffer));
+
+		ptrdiff_t input_size = Min(ArrayCount(FFTBuffer)/2, (last_ptr - write_ptr)/2);
+		for (ptrdiff_t index = 0; index < input_size; index += 1) {
 			FFTBuffer[index + 0] = ComplexRect((float)CurrentStream[frame * 2 + 0] / 32767.0f, 0);
 			//FFTBuffer[index + 1] = ComplexRect((float)CurrentStream[frame * 2 + 1] / 32767.0f, 0);
-
 			frame = (frame + 1) % MaxFrame;
 		}
 
-		InplaceFFT(FFTBuffer, ArrayCount(FFTBuffer));
-		ApplyTransformations(FFTBuffer, ArrayCount(FFTBuffer));
-		InplaceInvFFT(FFTBuffer, ArrayCount(FFTBuffer));
+		ptrdiff_t target = ArrayCount(FFTBuffer)/2;
+		for (ptrdiff_t index = 0; index < ArrayCount(FFTBuffer)/2; index += 1) {
+			ShiftedFFTBuffer[target++] = FFTBuffer[index];
+		}
+		target = 0;
+		for (ptrdiff_t index = ArrayCount(FFTBuffer)/2; index < ArrayCount(FFTBuffer); index += 1) {
+			ShiftedFFTBuffer[target++] = FFTBuffer[index];
+		}
+
+		float f = PreApplyTransformations(ShiftedFFTBuffer, ArrayCount(ShiftedFFTBuffer));
+
+		InplaceFFT(ShiftedFFTBuffer, ArrayCount(ShiftedFFTBuffer));
+		ApplyTransformations(ShiftedFFTBuffer, ArrayCount(ShiftedFFTBuffer), CurrentFrame, MaxFrame);
+		InplaceInvFFT(ShiftedFFTBuffer, ArrayCount(ShiftedFFTBuffer));
+
+		target = ArrayCount(FFTBuffer)/2;
+		for (ptrdiff_t index = 0; index < ArrayCount(FFTBuffer)/2; index += 1) {
+			FFTBuffer[target++] = ShiftedFFTBuffer[index];
+		}
+		target = 0;
+		for (ptrdiff_t index = ArrayCount(FFTBuffer)/2; index < ArrayCount(FFTBuffer); index += 1) {
+			FFTBuffer[target++] = ShiftedFFTBuffer[index];
+		}
 
 		for (uint index = 0; write_ptr < last_ptr && index < ArrayCount(FFTBuffer); ++index) {
-			write_ptr[0] = FFTBuffer[index].re;
-			write_ptr[1] = FFTBuffer[index].re;
+			write_ptr[0] = f * FFTBuffer[index].re;
+			write_ptr[1] = f * FFTBuffer[index].re;
 			write_ptr += 2;
 		}
 	}
 
-	CurrentFrame = (CurrentFrame + count) % MaxFrame;
+	CurrentFrame = frame; //(CurrentFrame + count) % MaxFrame;
 
 	return count;
 }
@@ -256,7 +350,7 @@ proc void PL_DrawRectVert(float x, float y, float w, float h, float color0[4], f
 static float   RenderingFrames[RENDER_MAX_FRAMES];
 static float   SpectrumMagnitudes[RENDER_MAX_SPECTRUM];
 static float   SpectrumMagnitudesTarget[RENDER_MAX_SPECTRUM];
-static float   SpectrumMagnitudesTargetToShift[RENDER_MAX_SPECTRUM];
+static Complex SpectrumScratchShift[RENDER_MAX_SPECTRUM];
 static Complex SpectrumScratch[RENDER_MAX_SPECTRUM];
 
 void Update(float window_w, float window_h, void *data) {
@@ -300,7 +394,7 @@ void Update(float window_w, float window_h, void *data) {
 
 	frame_pos = first_frame;
 	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; index += 1) {
-		SpectrumScratch[index + 0] = ComplexRect(CurrentStream[frame_pos * 2 + 0] / 32767.0f, 0);
+		SpectrumScratchShift[index + 0] = ComplexRect(CurrentStream[frame_pos * 2 + 0] / 32767.0f, 0);
 		//SpectrumScratch[index + 1] = ComplexRect(CurrentStream[frame_pos * 2 + 1] / 32767.0f, 0);
 
 		frame_pos += 1;
@@ -309,30 +403,36 @@ void Update(float window_w, float window_h, void *data) {
 		}
 	}
 
+	i32 target = RENDER_MAX_SPECTRUM/2;
+	for (i32 index = 0; index < RENDER_MAX_SPECTRUM/2; index += 1) {
+		SpectrumScratch[target++] = SpectrumScratchShift[index];
+	}
+	target = 0;
+	for (i32 index = RENDER_MAX_SPECTRUM/2; index < RENDER_MAX_SPECTRUM; ++index) {
+		SpectrumScratch[target++] = SpectrumScratchShift[index];
+	}
+
+	PreApplyTransformations(SpectrumScratch, ArrayCount(SpectrumScratch));
+
 	InplaceFFT(SpectrumScratch, ArrayCount(SpectrumScratch));
-	ApplyTransformations(SpectrumScratch, ArrayCount(SpectrumScratch));
+	ApplyTransformations(SpectrumScratch, ArrayCount(SpectrumScratch), first_frame, MaxFrame);
+
+	float max_spec_mag = -1.0f;
+	i32   max_spec_idx = -1;
 
 	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
 		Complex z = SpectrumScratch[index];
 		float re2 = z.re * z.re;
 		float im2 = z.im * z.im;
-		SpectrumMagnitudesTargetToShift[index] = sqrtf(re2 + im2);
-	}
-
-	float max_spec_mag = -1.0f;
-	i32   max_spec_idx = -1;
-
-	for (uint index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
-		uint target = (index + RENDER_MAX_SPECTRUM/2) & (RENDER_MAX_SPECTRUM-1);
-		SpectrumMagnitudesTarget[target] = SpectrumMagnitudesTargetToShift[index];
+		SpectrumMagnitudesTarget[index] = sqrtf(re2 + im2);
 
 		if (max_spec_mag < SpectrumMagnitudesTarget[target]) {
 			max_spec_mag = SpectrumMagnitudesTarget[target];
-			max_spec_idx = target;
+			max_spec_idx = index;
 		}
 	}
 
-	printf("Max: %d, %f\n", max_spec_idx - RENDER_MAX_SPECTRUM/2, max_spec_mag);
+	//printf("Max: %d, %f\n", max_spec_idx, max_spec_mag);
 
 	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
 		SpectrumMagnitudesTarget[index] = log10f(1.0f + SpectrumMagnitudesTarget[index]);
@@ -541,7 +641,7 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 	Audio_Stream *audio = (Audio_Stream *)buff;
 
 	CurrentStream = Serialize(audio, &MaxFrame);
-	//CurrentStream = GenerateSineWave(60, &MaxFrame);
+	//CurrentStream = GenerateSineWave(1024, &MaxFrame);
 
 	ctx->OnEvent = HandleEvent;
 	ctx->OnUpdate = Update;
