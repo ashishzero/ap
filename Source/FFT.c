@@ -66,7 +66,7 @@ static Complex InvTwiddleFactor(uint half_turns) {
 
 //
 // Procedures to rearrange data by bit-reversing permutation
-// 
+//
 
 void FFT_Rearrange(Complex *output, Complex *input, uint count) {
 	uint target = 0;

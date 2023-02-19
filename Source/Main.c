@@ -130,6 +130,9 @@ void CalcCoefficients(float freq) {
 	Alpha[2] = 0.0f;
 }
 
+void NextWaveForm();
+void PrevWaveForm();
+
 u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *buf, u32 count, void *user) {
 	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
 
@@ -154,7 +157,12 @@ u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *buf, u32 count, void *user) {
 		UpdateOutputHistory(out);
 
 		G.Pos += (G.FreqRatio * (float)InFreq / (float)spec->Frequency);
-		G.Pos = Wrap(0.0f, G.Pos, (float)G.Last);
+
+		if (G.Pos <= 0.0f) {
+			PrevWaveForm();
+		} else if (G.Pos >= G.Last) {
+			NextWaveForm();
+		}
 
 		dst->Left  = G.Volume * out.Left;
 		dst->Right = G.Volume * out.Right;
@@ -277,6 +285,20 @@ i16 *Serialize(Audio_Stream *audio, uint *count, uint *freq) {
 	return (i16 *)(ptr + 1);
 }
 
+void NextWaveForm() {
+	WaveFormIndex = (WaveFormIndex + 1) % WaveFormCount;
+	G.Pos = 0;
+	ClearHistory();
+	G.Frames = Serialize(WaveForms[WaveFormIndex], &G.Last, &InFreq);
+}
+
+void PrevWaveForm() {
+	WaveFormIndex = (WaveFormIndex - 1) % WaveFormCount;
+	G.Pos = 0;
+	ClearHistory();
+	G.Frames = Serialize(WaveForms[WaveFormIndex], &G.Last, &InFreq);
+}
+
 void HandleEvent(const KrEvent *event, void *user) {
 	if (event->Kind == KrEvent_Startup) {
 		KrAudio_Update();
@@ -331,15 +353,9 @@ void HandleEvent(const KrEvent *event, void *user) {
 		}
 
 		if (event->Key.Code == KrKey_N) {
-			WaveFormIndex = (WaveFormIndex + 1) % WaveFormCount;
-			G.Pos = 0;
-			ClearHistory();
-			G.Frames = Serialize(WaveForms[WaveFormIndex], &G.Last, &InFreq);
+			NextWaveForm();
 		} else if (event->Key.Code == KrKey_B) {
-			WaveFormIndex = (WaveFormIndex - 1) % WaveFormCount;
-			G.Pos = 0;
-			ClearHistory();
-			G.Frames = Serialize(WaveForms[WaveFormIndex], &G.Last, &InFreq);
+			PrevWaveForm();
 		}
 
 		if (event->Key.Code == KrKey_Up || event->Key.Code == KrKey_Down) {
