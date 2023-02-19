@@ -6,179 +6,191 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define RENDER_MAX_FRAMES 512
-
-static uint  MaxFrame      = 0;
-static uint  CurrentFrame  = 0;
-static i16 * CurrentStream = 0;
-static real  CurrentVolume = 1;
-static bool  Transform     = false;
-
-#define RENDER_MAX_SPECTRUM 1024
-#define FFT_MIN_FILTER      0
-#define FFT_MAX_FILTER      (RENDER_MAX_SPECTRUM-FFT_MIN_FILTER)
-
-static Complex ShiftedFFTBuffer[RENDER_MAX_SPECTRUM];
-static Complex FFTBuffer[RENDER_MAX_SPECTRUM];
-static Complex WindowBuffer[RENDER_MAX_SPECTRUM];
-
-void ApplyLowPassFilter(Complex *values, uint count, uint threshold_freq) {
-	for (uint index = threshold_freq + 1; index < count; ++index) {
-		values[index] = ComplexRect(0, 0);
-	}
+float Lerp(float a, float b, float t) {
+	return (1.0f - t) * a + t * b;
 }
 
-void ApplyHighPassFilter(Complex *values, uint count, uint threshold_freq) {
-	for (uint index = 0; index < threshold_freq; ++index) {
-		values[index] = ComplexRect(0, 0);
-	}
+#define MAX_RENDER_FRAMES  512
+#define MAX_PROCESS_FRAMES 512
+
+typedef struct AudioRenderBuffer {
+	float    TimeDomain[MAX_RENDER_FRAMES];
+	Complex  FreqDomain[MAX_RENDER_FRAMES];
+} AudioRenderBuffer;
+
+struct {
+	void    *Frames;
+	float    Pos;
+	uint     Last;
+	float    Volume;
+	float    FreqRatio;
+
+	// Rendering data
+	uint              RenderBufIndex;
+	AudioRenderBuffer RenderBufTarget[2];
+	AudioRenderBuffer RenderBuf;
+} G;
+
+typedef i16 PCM16FrameMono;
+
+typedef struct PCM16FrameStereo {
+	i16 Left;
+	i16 Right;
+} PCM16FrameStereo;
+
+typedef struct F32FrameStereo {
+	float Left;
+	float Right;
+} F32FrameStereo;
+
+static uint InFreq = 0; // @todo: cleanup
+
+float Wrap(float min, float a, float max) {
+	float range  = max - min;
+	float offset = a - min;
+	float result = (offset - (floorf(offset / range) * range) + min);
+	return result;
 }
 
-void ApplyBandPassFilter(Complex *values, uint count, uint threshold_a, uint threshold_b) {
-	for (uint index = 0; index < threshold_a; ++index) {
-		values[index] = ComplexRect(0, 0);
-	}
-	for (uint index = threshold_b + 1; index < count; ++index) {
-		values[index] = ComplexRect(0, 0);
-	}
+float MapRange(float in_a, float in_b, float out_a, float out_b, float v) {
+	return (out_b - out_a) / (in_b - in_a) * (v - in_a) + out_a;
 }
 
-float ComplexLenSq(Complex c) {
-	return c.re * c.re + c.im * c.im;
+F32FrameStereo LoadFrame(PCM16FrameStereo *src, float frame, uint last) {
+	float index;
+	float alpha = modff(frame, &index);
+	uint pos    = (uint)index;
+
+	PCM16FrameStereo pcm_a = src[pos];
+	PCM16FrameStereo pcm_b = src[(pos - 1) % last];
+
+	F32FrameStereo a = {
+		.Left  = MapRange(INT16_MIN, INT16_MAX, -1.0f, 1.0f, pcm_a.Left),
+		.Right = MapRange(INT16_MIN, INT16_MAX, -1.0f, 1.0f, pcm_a.Right)
+	};
+
+	F32FrameStereo b = {
+		.Left  = MapRange(INT16_MIN, INT16_MAX, -1.0f, 1.0f, pcm_b.Left),
+		.Right = MapRange(INT16_MIN, INT16_MAX, -1.0f, 1.0f, pcm_b.Right)
+	};
+
+	F32FrameStereo out = {
+		.Left  = Lerp(a.Left, b.Left, alpha),
+		.Right = Lerp(a.Right, b.Right, alpha),
+	};
+
+	return out;
 }
 
-float PreApplyTransformations(Complex *data, uint count) {
-	if (!Transform) return 1.0f;
+#define HISTORY_COUNT 3
 
-	float sum = 0.0f;
+static F32FrameStereo HistoryIn[HISTORY_COUNT];
+static F32FrameStereo HistoryOut[HISTORY_COUNT];
+static float          Alpha[HISTORY_COUNT];
+static float          Beta[HISTORY_COUNT];
 
-#if 1
-	// Blackman window
-	for (uint index = 0; index < count; ++index) {
-		float alpha = 0.16f;
-		float a0 = (1.0f - alpha) / 2.0f;
-		float a1 = 1.0f / 2.0f;
-		float a2 = alpha / 2.0f;
-		float div = (float)index / (float)count;
-		float window_x = a0 - a1 * cosf(2 * 3.14f * div) + a2 * cosf(4 * 3.14f * div);
-		data[index].re *= window_x;
-		sum += window_x;
-	}
-#endif
+void ClearHistory() {
+	memset(HistoryIn, 0, sizeof(HistoryIn));
+	memset(HistoryOut, 0, sizeof(HistoryOut));
 
-#if 0
-	// Sine window
-	for (uint index = 0; index < count; ++index) {
-		float freq = 40.0f;
-		float div  = (float)index / (float)count;
-		float window_x = sinf(2.0f * 3.14f * freq * div);
-		data[index].re *= window_x;
-	}
-#endif
-
-#if 0
-	// Rect window
-	for (uint index = 0; index < count; ++index) {
-		float alpha = 0.16f;
-		data[index].re *= alpha;
-	}
-#endif
-
-	return sum;
+	Alpha[0] = 0.99f;
+	Beta[0]  = 1.0f - Alpha[0];
 }
 
-void ApplyTransformations(Complex *data, uint count, uint first, uint max) {
-	if (!Transform) return;
-
-	#if 1
-	//for (uint i = 0; i < count; ++i) {
-	//	data[i] = ComplexMul(data[i], WindowBuffer[i]);
-	//}
-	#endif
-
-	//for (uint idx = 0; idx < count; idx += 2) {
-	//	data[idx] = ComplexRect(0, 0);
-	//}
-	//for (uint idx = 128; idx < count; ++idx) {
-	//	data[idx] = ComplexRect(0, 0);
-	//}
-
-	//for (int iter = 0; iter < 60; ++iter) {
-	//	float max_mag = 0.0f;
-	//	uint  max_idx = 0;
-
-	//	for (uint idx = 0; idx < RENDER_MAX_SPECTRUM; ++idx) {
-	//		float mag = ComplexLenSq(data[idx]);
-	//		if (mag > max_mag) {
-	//			max_mag = mag;
-	//			max_idx = idx;
-	//		}
-	//	}
-
-	//	data[max_idx] = ComplexRect(0, 0);
-	//}
-
-	
-	//for (uint index = 100; index < RENDER_MAX_SPECTRUM-100; ++index) {
-	//	data[index] = ComplexRect(0, 0);
-	//}
-
-	//ApplyHighPassFilter(data, count, 100);
-	//ApplyLowPassFilter(data, count, 1024-100);
+void UpdateInputHistory(F32FrameStereo in) {
+	for (int i = ArrayCount(HistoryIn) - 1; i > 0; --i) {
+		HistoryIn[i] = HistoryIn[i - 1];
+	}
+	HistoryIn[0]  = in;
 }
 
-u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *dst, u32 count, void *user) {
+void UpdateOutputHistory(F32FrameStereo out) {
+	for (int i = ArrayCount(HistoryOut) - 1; i > 0; --i) {
+		HistoryOut[i] = HistoryOut[i - 1];
+	}
+	HistoryOut[0] = out;
+}
+
+static float QFreq   = 0.1f;
+static float QFactor = 0.0f;
+
+void CalcCoefficients(float freq) {
+	float f = MapRange(0.0f, 1.0f, 0.0f, 22000.0f, QFreq);
+	float q = MapRange(0.0f, 1.0f, 0.1f, 10.0f, QFactor);
+
+	float k = tanf(3.14f * f / freq);
+	float norm = 1.0f / (1 + k / q + k * k);
+
+	Beta[0] = k * k * norm;
+	Beta[1] = 2.0f * Beta[0];
+	Beta[2] = Beta[0];
+
+	Alpha[0] = 2.0f * (k * k - 1) * norm;
+	Alpha[1] = (1 - k / q + k * k) * norm;
+	Alpha[2] = 0.0f;
+}
+
+u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *buf, u32 count, void *user) {
 	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
 
-	uint sample_count = count * 2;
-	float *write_ptr  = (float *)dst;
-	float *last_ptr   = write_ptr + sample_count;
+	F32FrameStereo   *dst = (F32FrameStereo *)buf;
+	F32FrameStereo   *end = dst + count;
+	PCM16FrameStereo *src = (PCM16FrameStereo *)G.Frames;
 
-	uint frame = CurrentFrame;
-	while (write_ptr < last_ptr) {
-		// @Hack: Currently just working with 1 channel
+	while (dst < end) {
+		CalcCoefficients((float)spec->Frequency);
 
-		memset(FFTBuffer, 0, sizeof(FFTBuffer));
+		F32FrameStereo in  = LoadFrame(src, G.Pos, G.Last);
 
-		ptrdiff_t input_size = Min(ArrayCount(FFTBuffer)/2, (last_ptr - write_ptr)/2);
-		for (ptrdiff_t index = 0; index < input_size; index += 1) {
-			FFTBuffer[index + 0] = ComplexRect((float)CurrentStream[frame * 2 + 0] / 32767.0f, 0);
-			//FFTBuffer[index + 1] = ComplexRect((float)CurrentStream[frame * 2 + 1] / 32767.0f, 0);
-			frame = (frame + 1) % MaxFrame;
+		UpdateInputHistory(in);
+
+		F32FrameStereo out = { .Left = 0.0f, .Right = 0.0f };
+
+		for (int i = 0; i < HISTORY_COUNT; ++i) {
+			out.Left  += Beta[i] * HistoryIn[i].Left - Alpha[i] * HistoryOut[i].Left;
+			out.Right += Beta[i] * HistoryIn[i].Right - Alpha[i] * HistoryOut[i].Right;
 		}
 
-		ptrdiff_t target = ArrayCount(FFTBuffer)/2;
-		for (ptrdiff_t index = 0; index < ArrayCount(FFTBuffer)/2; index += 1) {
-			ShiftedFFTBuffer[target++] = FFTBuffer[index];
-		}
-		target = 0;
-		for (ptrdiff_t index = ArrayCount(FFTBuffer)/2; index < ArrayCount(FFTBuffer); index += 1) {
-			ShiftedFFTBuffer[target++] = FFTBuffer[index];
-		}
+		UpdateOutputHistory(out);
 
-		float f = PreApplyTransformations(ShiftedFFTBuffer, ArrayCount(ShiftedFFTBuffer));
+		G.Pos += (G.FreqRatio * (float)InFreq / (float)spec->Frequency);
+		G.Pos = Wrap(0.0f, G.Pos, (float)G.Last);
 
-		InplaceFFT(ShiftedFFTBuffer, ArrayCount(ShiftedFFTBuffer));
-		ApplyTransformations(ShiftedFFTBuffer, ArrayCount(ShiftedFFTBuffer), CurrentFrame, MaxFrame);
-		InplaceInvFFT(ShiftedFFTBuffer, ArrayCount(ShiftedFFTBuffer));
+		dst->Left  = G.Volume * out.Left;
+		dst->Right = G.Volume * out.Right;
 
-		target = ArrayCount(FFTBuffer)/2;
-		for (ptrdiff_t index = 0; index < ArrayCount(FFTBuffer)/2; index += 1) {
-			FFTBuffer[target++] = ShiftedFFTBuffer[index];
+		dst += 1;
+	}
+
+#if 1
+	// @Todo: support for multiple channels
+	F32FrameStereo *out = (F32FrameStereo*)buf;
+
+	uint next_buf_index = (G.RenderBufIndex + 1) & 1;
+
+	if (count < MAX_RENDER_FRAMES) {
+		uint offset = MAX_RENDER_FRAMES - count;
+		memcpy(G.RenderBufTarget[next_buf_index].TimeDomain, G.RenderBufTarget[G.RenderBufIndex].TimeDomain + count, offset * sizeof(float));
+		for (uint i = 0; i < count; ++i) {
+			G.RenderBufTarget[next_buf_index].TimeDomain[offset + i] = out[i].Left;
 		}
-		target = 0;
-		for (ptrdiff_t index = ArrayCount(FFTBuffer)/2; index < ArrayCount(FFTBuffer); index += 1) {
-			FFTBuffer[target++] = ShiftedFFTBuffer[index];
-		}
-
-		for (uint index = 0; write_ptr < last_ptr && index < ArrayCount(FFTBuffer); ++index) {
-			write_ptr[0] = f * FFTBuffer[index].re;
-			write_ptr[1] = f * FFTBuffer[index].re;
-			write_ptr += 2;
+	} else {
+		uint offset = count - MAX_RENDER_FRAMES;
+		for (uint i = 0; i < MAX_RENDER_FRAMES; ++i) {
+			G.RenderBufTarget[next_buf_index].TimeDomain[i] = out[offset + i].Left;
 		}
 	}
 
-	CurrentFrame = frame; //(CurrentFrame + count) % MaxFrame;
+	memset(G.RenderBufTarget[next_buf_index].FreqDomain, 0, sizeof(G.RenderBufTarget[next_buf_index].FreqDomain));
+
+	for (uint i = 0; i < MAX_RENDER_FRAMES; ++i) {
+		G.RenderBufTarget[next_buf_index].FreqDomain[i].re = G.RenderBufTarget[next_buf_index].TimeDomain[i];
+	}
+
+	InplaceFFT(G.RenderBufTarget[next_buf_index].FreqDomain, MAX_RENDER_FRAMES);
+
+	G.RenderBufIndex = next_buf_index;
+#endif
 
 	return count;
 }
@@ -245,7 +257,11 @@ typedef struct Audio_Stream {
 
 #pragma pack(pop)
 
-i16 *Serialize(Audio_Stream *audio, uint *count) {
+static uint           WaveFormIndex;
+static uint           WaveFormCount;
+static Audio_Stream **WaveForms;
+
+i16 *Serialize(Audio_Stream *audio, uint *count, uint *freq) {
 	Wave_Data *ptr = &audio->data;
 	for (; ptr->id[0] == 'L';) {
 		uint sz = ptr->size;
@@ -256,6 +272,8 @@ i16 *Serialize(Audio_Stream *audio, uint *count) {
 	*count = ptr->size / sizeof(i16);
 	*count /= audio->fmt.channels_count;
 
+	*freq = audio->fmt.sample_rate;
+
 	return (i16 *)(ptr + 1);
 }
 
@@ -263,24 +281,6 @@ void HandleEvent(const KrEvent *event, void *user) {
 	if (event->Kind == KrEvent_Startup) {
 		KrAudio_Update();
 		KrAudio_Resume();
-	}
-
-	if (event->Kind == KrEvent_KeyPressed) {
-		if (event->Key.Code == KrKey_Left || event->Key.Code == KrKey_Right) {
-			int direction = event->Key.Code == KrKey_Left ? -1 : 1;
-			int magnitude = event->Key.Repeat ? 5 : 10;
-			int next = CurrentFrame + (direction * magnitude) * 48000;
-			next = Clamp(0, (int)MaxFrame, next);
-			CurrentFrame = next;
-		}
-
-		if (event->Key.Code == KrKey_Up || event->Key.Code == KrKey_Down) {
-			float direction = event->Key.Code == KrKey_Down ? -1.0f : 1.0f;
-			float magnitude = event->Key.Repeat ? 0.01f : 0.02f;
-			float next = CurrentVolume + direction * magnitude;
-			next = Clamp(0.0f, 1.0f, next);
-			CurrentVolume = next;
-		}
 	}
 
 	if (event->Kind == KrEvent_KeyPressed && !event->Key.Repeat) {
@@ -291,16 +291,69 @@ void HandleEvent(const KrEvent *event, void *user) {
 				KrAudio_Resume();
 			}
 		}
-		if (event->Key.Code == KrKey_T) {
-			Transform = !Transform;
-		}
 		if (event->Key.Code == KrKey_F11) {
 			KrWindow_ToggleFullscreen();
+		}
+	}
+
+	if (event->Kind == KrEvent_KeyPressed) {
+		if (event->Key.Code == KrKey_Q) {
+			QFactor = Clamp(0.0f, 1.0f, QFactor - 0.1f);
+			printf("Q = %f\n", QFactor);
+		} else if (event->Key.Code == KrKey_W) {
+			QFactor = Clamp(0.0f, 1.0f, QFactor + 0.1f);
+			printf("Q = %f\n", QFactor);
+		}
+
+		if (event->Key.Code == KrKey_A) {
+			QFreq = Clamp(0.0f, 1.0f, QFreq - 0.1f);
+			printf("QFreq = %f\n", QFreq);
+		} else if (event->Key.Code == KrKey_S) {
+			QFreq = Clamp(0.0f, 1.0f, QFreq + 0.1f);
+			printf("QFreq = %f\n", QFreq);
+		}
+
+		if (event->Key.Code == KrKey_Left || event->Key.Code == KrKey_Right) {
+			int direction = event->Key.Code == KrKey_Left ? -1 : 1;
+			int magnitude = event->Key.Repeat ? 5 : 10;
+			float next = G.Pos + (direction * magnitude) * 48000;
+			next = Clamp(0, (float)G.Last, next);
+			G.Pos = next;
+			ClearHistory();
+		}
+
+		if (event->Key.Code == KrKey_Plus) {
+			G.FreqRatio += 0.1f;
+			printf("FreqRatio = %f\n", G.FreqRatio);
+		} else if (event->Key.Code == KrKey_Minus) {
+			G.FreqRatio -= 0.1f;
+			printf("FreqRatio = %f\n", G.FreqRatio);
+		}
+
+		if (event->Key.Code == KrKey_N) {
+			WaveFormIndex = (WaveFormIndex + 1) % WaveFormCount;
+			G.Pos = 0;
+			ClearHistory();
+			G.Frames = Serialize(WaveForms[WaveFormIndex], &G.Last, &InFreq);
+		} else if (event->Key.Code == KrKey_B) {
+			WaveFormIndex = (WaveFormIndex - 1) % WaveFormCount;
+			G.Pos = 0;
+			ClearHistory();
+			G.Frames = Serialize(WaveForms[WaveFormIndex], &G.Last, &InFreq);
+		}
+
+		if (event->Key.Code == KrKey_Up || event->Key.Code == KrKey_Down) {
+			float direction = event->Key.Code == KrKey_Down ? -1.0f : 1.0f;
+			float magnitude = event->Key.Repeat ? 0.01f : 0.02f;
+			float next = G.Volume + direction * magnitude;
+			next = Clamp(0.0f, 1.0f, next);
+			G.Volume = next;
 		}
 
 		if (event->Key.Code >= KrKey_0 && event->Key.Code <= KrKey_9) {
 			float fraction = (float)(event->Key.Code - KrKey_0) / 10.0f;
-			CurrentFrame = (uint)lroundf(fraction * (float)MaxFrame);
+			G.Pos = fraction * (float)G.Last;
+			ClearHistory();
 		}
 	}
 }
@@ -317,9 +370,11 @@ Color Mix(Color a, Color b, float t) {
 	return r;
 }
 
-
-float Lerp(float a, float b, float t) {
-	return (1.0f - t) * a + t * b;
+Complex ComplexLerp(Complex a, Complex b, float t) {
+	Complex r;
+	r.re = Lerp(a.re, b.re, t);
+	r.im = Lerp(a.im, b.im, t);
+	return r;
 }
 
 typedef struct Quad {
@@ -347,12 +402,6 @@ proc void PL_DrawQuad(float p0[2], float p1[2], float p2[2], float p3[2], float 
 proc void PL_DrawRect(float x, float y, float w, float h, float color0[4], float color1[4]);
 proc void PL_DrawRectVert(float x, float y, float w, float h, float color0[4], float color1[4]);
 
-static float   RenderingFrames[RENDER_MAX_FRAMES];
-static float   SpectrumMagnitudes[RENDER_MAX_SPECTRUM];
-static float   SpectrumMagnitudesTarget[RENDER_MAX_SPECTRUM];
-static Complex SpectrumScratchShift[RENDER_MAX_SPECTRUM];
-static Complex SpectrumScratch[RENDER_MAX_SPECTRUM];
-
 void Update(float window_w, float window_h, void *data) {
 	const float PaddingX = 50.0f;
 	const float PaddingY = 100.0f;
@@ -369,100 +418,44 @@ void Update(float window_w, float window_h, void *data) {
 	float x = PaddingX;
 	float y = PaddingY + h / 2;
 
-	float d = w / (float)RENDER_MAX_FRAMES;
+	float d = w / (float)MAX_RENDER_FRAMES;
 	float g = d - Gap;
 
 	Color base  = { 1.0f, 1.0f, 0.0f, 1.0f };
 	Color highy = { 1.0f, 0.0f, 0.0f, 1.0f };
 	Color highx = { 0.0f, 1.0f, 0.0f, 1.0f };
 
-	u32 first_frame = (uint)CurrentFrame;
-	u32 frame_pos = first_frame;
-
-	for (i32 index = 0; index < RENDER_MAX_FRAMES; ++index) {
-		float l = (float)CurrentStream[frame_pos * 2 + 0] / 32767.0f;
-		float r = (float)CurrentStream[frame_pos * 2 + 1] / 32767.0f;
-		float val = 0.5f * (l + r);
-
-		RenderingFrames[index] = Lerp(RenderingFrames[index], val, 0.2f);
-
-		frame_pos += 1;
-		if (frame_pos >= MaxFrame) {
-			frame_pos = 0;
-		}
-	}
-
-	frame_pos = first_frame;
-	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; index += 1) {
-		SpectrumScratchShift[index + 0] = ComplexRect(CurrentStream[frame_pos * 2 + 0] / 32767.0f, 0);
-		//SpectrumScratch[index + 1] = ComplexRect(CurrentStream[frame_pos * 2 + 1] / 32767.0f, 0);
-
-		frame_pos += 1;
-		if (frame_pos >= MaxFrame) {
-			frame_pos = 0;
-		}
-	}
-
-	i32 target = RENDER_MAX_SPECTRUM/2;
-	for (i32 index = 0; index < RENDER_MAX_SPECTRUM/2; index += 1) {
-		SpectrumScratch[target++] = SpectrumScratchShift[index];
-	}
-	target = 0;
-	for (i32 index = RENDER_MAX_SPECTRUM/2; index < RENDER_MAX_SPECTRUM; ++index) {
-		SpectrumScratch[target++] = SpectrumScratchShift[index];
-	}
-
-	PreApplyTransformations(SpectrumScratch, ArrayCount(SpectrumScratch));
-
-	InplaceFFT(SpectrumScratch, ArrayCount(SpectrumScratch));
-	ApplyTransformations(SpectrumScratch, ArrayCount(SpectrumScratch), first_frame, MaxFrame);
-
 	float max_spec_mag = -1.0f;
 	i32   max_spec_idx = -1;
-
-	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
-		Complex z = SpectrumScratch[index];
-		float re2 = z.re * z.re;
-		float im2 = z.im * z.im;
-		SpectrumMagnitudesTarget[index] = sqrtf(re2 + im2);
-
-		if (max_spec_mag < SpectrumMagnitudesTarget[target]) {
-			max_spec_mag = SpectrumMagnitudesTarget[target];
-			max_spec_idx = index;
-		}
-	}
-
-	//printf("Max: %d, %f\n", max_spec_idx, max_spec_mag);
-
-	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
-		SpectrumMagnitudesTarget[index] = log10f(1.0f + SpectrumMagnitudesTarget[index]);
-	}
-
-	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
-		SpectrumMagnitudes[index] = Lerp(SpectrumMagnitudes[index], SpectrumMagnitudesTarget[index], 0.2f);
-	}
 
 	float spec_color_a[] = { 1,1,0,1 };
 	float spec_color_b[] = { 1,0,0,1 };
 
 	float spec_g = 0.2f;
-	float spec_w = 1.0f;
-	float spec_x = 0.5f * (window_w - (spec_w + spec_g) * RENDER_MAX_SPECTRUM);
+	float spec_w = 2.0f;
+	float spec_x = 0.5f * (window_w - (spec_w + spec_g) * MAX_RENDER_FRAMES);
 	float spec_y = y + 0.4f * h;
 	float spec_min_height = 2.0f;
 	float spec_max_height = 100.0f;
-	for (i32 index = 0; index < RENDER_MAX_SPECTRUM; ++index) {
-		float val = SpectrumMagnitudes[index];
 
-		float spec_h = val * spec_max_height;
+	for (i32 index = 0; index < MAX_RENDER_FRAMES; ++index) {
+		G.RenderBuf.TimeDomain[index] = Lerp(G.RenderBuf.TimeDomain[index], G.RenderBufTarget[G.RenderBufIndex].TimeDomain[index], 0.2f); 
+		G.RenderBuf.FreqDomain[index] = ComplexLerp(G.RenderBuf.FreqDomain[index], G.RenderBufTarget[G.RenderBufIndex].FreqDomain[index], 0.2f);
+	}
+
+	for (i32 index = 0; index < MAX_RENDER_FRAMES; ++index) {
+		Complex val  = G.RenderBuf.FreqDomain[index];
+		float mag2   = log10f(1.0f + val.re * val.re + val.im * val.im);
+		float spec_h = sqrtf(mag2) * spec_max_height;
+
 		PL_DrawRectVert(spec_x, spec_y, spec_w, spec_min_height + spec_h, spec_color_a, spec_color_b);
 		spec_x += (spec_w + spec_g);
 	}
 
-	for (i32 index = 0; index < RENDER_MAX_FRAMES; ++index) {
-		float val = RenderingFrames[index];
+	for (i32 index = 0; index < MAX_RENDER_FRAMES; ++index) {
+		float val = G.RenderBuf.TimeDomain[index];
 
-		float midx = (float)index / (float)RENDER_MAX_FRAMES;
+		float midx = (float)index / (float)MAX_RENDER_FRAMES;
 		float midy = fabsf(val);
 		Color basex = Mix(base, highx, midx);
 		Color midcolor = Mix(basex, highy, midy);
@@ -486,7 +479,7 @@ void Update(float window_w, float window_h, void *data) {
 	float progress_w = w;
 	float progress_h = 10.0f;
 
-	float progress_target = (progress_w * CurrentFrame) / (float)MaxFrame;
+	float progress_target = (progress_w * G.Pos) / (float)G.Last;
 
 	float progress_bg[] = { 0.0f, 0.0f, 0.0f, 1.0f };
 	float progress_fg[] = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -494,7 +487,7 @@ void Update(float window_w, float window_h, void *data) {
 	Color volume_fg_stop = { 8.0f, 0.1f, 0.0f, 1.0f };
 
 	Progress = Lerp(Progress, progress_target, 0.2f);
-	VolumeDisp = Lerp(VolumeDisp, CurrentVolume, 0.2f);
+	VolumeDisp = Lerp(VolumeDisp, G.Volume, 0.2f);
 
 	float volume_w = 10.0f;
 	float volume_h = 150.0f;
@@ -634,14 +627,21 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 		Usage(argv[0]);
 	}
 
-	const char *path = argv[1];
+	ClearHistory();
 
-	umem size = 0;
-	u8 *buff = ReadEntireFile(path, &size);
-	Audio_Stream *audio = (Audio_Stream *)buff;
+	WaveForms = (Audio_Stream **)malloc(argc * sizeof(Audio_Stream *));
 
-	CurrentStream = Serialize(audio, &MaxFrame);
-	//CurrentStream = GenerateSineWave(1024, &MaxFrame);
+	for (int i = 1; i < argc; ++i) {
+		const char *path = argv[i];
+
+		umem size = 0;
+		u8 *buff  = ReadEntireFile(path, &size);
+		WaveForms[WaveFormCount++] = (Audio_Stream *)buff;
+	}
+
+	G.Volume    = 1;
+	G.FreqRatio = 1;
+	G.Frames    = Serialize(WaveForms[WaveFormIndex], &G.Last, &InFreq);
 
 	ctx->OnEvent = HandleEvent;
 	ctx->OnUpdate = Update;
