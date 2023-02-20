@@ -139,7 +139,7 @@ void PrevWaveForm();
 
 static const int WindowLength         = WINDOW_LENGTH;
 static const int HopLength            = HOP_LENGTH;
-static const int FFTLength            = FFT_LENGTH;
+static const int FFTLength            = WINDOW_LENGTH;
 static const int InputFrameLength     = WINDOW_LENGTH;
 static const int OutputFrameLength    = WINDOW_LENGTH;
 
@@ -149,7 +149,17 @@ static Complex        FFTBufferR[FFT_LENGTH];
 static F32FrameStereo OutputFrames[WINDOW_LENGTH];
 static int            OutputFramePos = HOP_LENGTH;
 
+static bool ApplyTransformation = false;
+
 void Transform(Complex *buf, uint length) {
+	if (!ApplyTransformation) return;
+
+	// robotize
+	for (uint i = 0; i < length; ++i) {
+		float a   = sqrtf(buf[i].re * buf[i].re + buf[i].im * buf[i].im);
+		buf[i].re = a;
+		buf[i].im = 0.0f;
+	}
 }
 
 void Process(const KrAudioSpec *spec) {
@@ -394,6 +404,10 @@ void HandleEvent(const KrEvent *event, void *user) {
 		} else if (event->Key.Code == KrKey_S) {
 			QFreq = Clamp(0.0f, 1.0f, QFreq + 0.1f);
 			printf("QFreq = %f\n", QFreq);
+		}
+
+		if (event->Key.Code == KrKey_Return) {
+			ApplyTransformation = !ApplyTransformation;
 		}
 
 		if (event->Key.Code == KrKey_Left || event->Key.Code == KrKey_Right) {
