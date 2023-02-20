@@ -217,7 +217,12 @@ u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *buf, u32 count, void *user) {
 	while (dst < end) {
 		Process(spec);
 
+		float overlap = (float)HopLength / (float)WindowLength;
+
 		F32FrameStereo out = OutputFrames[OutputFramePos];
+		out.Left *= overlap;
+		out.Right *= overlap;
+
 		OutputFramePos += 1;
 
 		dst->Left  = G.Volume * out.Left;
