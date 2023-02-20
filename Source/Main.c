@@ -133,36 +133,92 @@ void CalcCoefficients(float freq) {
 void NextWaveForm();
 void PrevWaveForm();
 
-u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *buf, u32 count, void *user) {
-	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
+#define FFT_LENGTH    2048
+#define WINDOW_LENGTH 1024
+#define HOP_LENGTH    512
 
-	F32FrameStereo   *dst = (F32FrameStereo *)buf;
-	F32FrameStereo   *end = dst + count;
+static const int WindowLength         = WINDOW_LENGTH;
+static const int HopLength            = HOP_LENGTH;
+static const int FFTLength            = FFT_LENGTH;
+static const int InputFrameLength     = WINDOW_LENGTH;
+static const int OutputFrameLength    = WINDOW_LENGTH;
+
+static F32FrameStereo InputFrames[WINDOW_LENGTH];
+static Complex        FFTBufferL[FFT_LENGTH];
+static Complex        FFTBufferR[FFT_LENGTH];
+static F32FrameStereo OutputFrames[WINDOW_LENGTH];
+static int            OutputFramePos = HOP_LENGTH;
+
+void Transform(Complex *buf, uint length) {
+}
+
+void Process(const KrAudioSpec *spec) {
+	if (OutputFramePos < HopLength)
+		return;
+
+	OutputFramePos = 0;
+
 	PCM16FrameStereo *src = (PCM16FrameStereo *)G.Frames;
 
-	while (dst < end) {
-		CalcCoefficients((float)spec->Frequency);
+	memcpy(InputFrames, InputFrames + HopLength, (InputFrameLength - HopLength) * sizeof(F32FrameStereo));
 
-		F32FrameStereo in  = LoadFrame(src, G.Pos, G.Last);
-
-		UpdateInputHistory(in);
-
-		F32FrameStereo out = { .Left = 0.0f, .Right = 0.0f };
-
-		for (int i = 0; i < HISTORY_COUNT; ++i) {
-			out.Left  += Beta[i] * HistoryIn[i].Left - Alpha[i] * HistoryOut[i].Left;
-			out.Right += Beta[i] * HistoryIn[i].Right - Alpha[i] * HistoryOut[i].Right;
-		}
-
-		UpdateOutputHistory(out);
-
+	for (int index = InputFrameLength - HopLength; index < WindowLength; ++index) {
+		InputFrames[index] = LoadFrame(src, G.Pos, G.Last);
 		G.Pos += (G.FreqRatio * (float)InFreq / (float)spec->Frequency);
 
+		// TODO: correct transition
 		if (G.Pos <= 0.0f) {
 			PrevWaveForm();
 		} else if (G.Pos >= G.Last) {
 			NextWaveForm();
 		}
+	}
+
+	Assert(InputFrameLength >= WindowLength);
+
+	for (int index = 0; index < WindowLength; ++index) {
+		FFTBufferL[index].re = InputFrames[index].Left;
+		FFTBufferR[index].re = InputFrames[index].Right;
+		FFTBufferL[index].im = 0.0f;
+		FFTBufferR[index].im = 0.0f;
+	}
+	for (int index = WindowLength; index < FFTLength; ++index) {
+		FFTBufferL[index].re = 0.0f;
+		FFTBufferR[index].re = 0.0f;
+		FFTBufferL[index].im = 0.0f;
+		FFTBufferR[index].im = 0.0f;
+	}
+
+	InplaceFFT(FFTBufferL, FFTLength);
+	InplaceFFT(FFTBufferR, FFTLength);
+
+	Transform(FFTBufferL, FFTLength);
+	Transform(FFTBufferR, FFTLength);
+
+	InplaceInvFFT(FFTBufferL, FFTLength);
+	InplaceInvFFT(FFTBufferR, FFTLength);
+
+	memcpy(OutputFrames, OutputFrames + HopLength, (OutputFrameLength - HopLength) * sizeof(F32FrameStereo));
+	memset(OutputFrames + OutputFrameLength - HopLength, 0, HopLength * sizeof(F32FrameStereo));
+
+	for (int index = 0; index < WindowLength; ++index) {
+		OutputFrames[index].Left += FFTBufferL[index].re;
+		OutputFrames[index].Right += FFTBufferR[index].re;
+	}
+}
+
+u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *buf, u32 count, void *user) {
+	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
+
+	F32FrameStereo   *dst = (F32FrameStereo *)buf;
+	F32FrameStereo   *end = dst + count;
+	//PCM16FrameStereo *src = (PCM16FrameStereo *)G.Frames;
+
+	while (dst < end) {
+		Process(spec);
+
+		F32FrameStereo out = OutputFrames[OutputFramePos];
+		OutputFramePos += 1;
 
 		dst->Left  = G.Volume * out.Left;
 		dst->Right = G.Volume * out.Right;
@@ -447,9 +503,11 @@ void Update(float window_w, float window_h, void *data) {
 	float spec_color_a[] = { 1,1,0,1 };
 	float spec_color_b[] = { 1,0,0,1 };
 
+	int   max_spec = MAX_RENDER_FRAMES / 2;
+
 	float spec_g = 0.2f;
 	float spec_w = 2.0f;
-	float spec_x = 0.5f * (window_w - (spec_w + spec_g) * MAX_RENDER_FRAMES);
+	float spec_x = 0.5f * (window_w - (spec_w + spec_g) * max_spec);
 	float spec_y = y + 0.4f * h;
 	float spec_min_height = 2.0f;
 	float spec_max_height = 100.0f;
@@ -459,10 +517,10 @@ void Update(float window_w, float window_h, void *data) {
 		G.RenderBuf.FreqDomain[index] = ComplexLerp(G.RenderBuf.FreqDomain[index], G.RenderBufTarget[G.RenderBufIndex].FreqDomain[index], 0.2f);
 	}
 
-	for (i32 index = 0; index < MAX_RENDER_FRAMES; ++index) {
-		Complex val  = G.RenderBuf.FreqDomain[index];
-		float mag2   = log10f(1.0f + val.re * val.re + val.im * val.im);
-		float spec_h = sqrtf(mag2) * spec_max_height;
+	for (i32 index = 0; index < max_spec; ++index) {
+		Complex val   = G.RenderBuf.FreqDomain[index];
+		float mag     = sqrtf(val.re * val.re + val.im * val.im);
+		float spec_h  = log10f(1.0f + mag) * spec_max_height;
 
 		PL_DrawRectVert(spec_x, spec_y, spec_w, spec_min_height + spec_h, spec_color_a, spec_color_b);
 		spec_x += (spec_w + spec_g);
