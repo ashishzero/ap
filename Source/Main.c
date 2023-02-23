@@ -52,6 +52,15 @@ float Wrap(float min, float a, float max) {
 }
 
 float WrapAngle(float radians) {
+	/*const float pi = (float)MATH_PI;
+	while (radians > pi) {
+		radians -= pi;
+	}
+	while (radians < -pi) {
+		radians += pi;
+	}
+	return radians;*/
+
 	return Wrap((float)-MATH_PI, radians, (float)MATH_PI);
 }
 
@@ -244,24 +253,38 @@ void Process(const KrAudioSpec *spec) {
 		AmplitudesL[index] = ComplexLength(FFTBufferL[index]);
 		AmplitudesR[index] = ComplexLength(FFTBufferR[index]);
 
-		float l = atan2f(FFTBufferL[index].im, FFTBufferL[index].re);
-		float r = atan2f(FFTBufferR[index].im, FFTBufferR[index].re);
+		float phase_left  = atan2f(FFTBufferL[index].im, FFTBufferL[index].re);
+		float phase_right = atan2f(FFTBufferR[index].im, FFTBufferR[index].re);
 
-		// WTF did we do here??
-		float center = 2.0f * (float)MATH_PI * (float)index / (float)FFTLength;
-		float expected = center * (float)HopLength;
+		float prev_phase_left  = PrevPhasesL[index];
+		float prev_phase_right = PrevPhasesR[index];
 
-		float diff_l = WrapAngle(l - PrevPhasesL[index] - expected);
-		float diff_r = WrapAngle(r - PrevPhasesR[index] - expected);
+		float expected_phase_shift = 2.0f * (float)MATH_PI * (float)index * (float)HopLength / (float)FFTLength;
+		float actual_phase_shift_l = phase_left - prev_phase_left;
+		float actual_phase_shift_r = phase_right - prev_phase_right;
 
-		float deviation_l = diff_l * (float)FFTLength / (float)HopLength / (2.0f * (float)MATH_PI);
-		float deviation_r = diff_r * (float)FFTLength / (float)HopLength / (2.0f * (float)MATH_PI);
+		float phase_remainder_l = actual_phase_shift_l - expected_phase_shift;
+		float phase_remainder_r = actual_phase_shift_r - expected_phase_shift;
 
-		DetectedFrequenciesL[index] = (float)index + deviation_l;
-		DetectedFrequenciesR[index] = (float)index + deviation_r;
+		phase_remainder_l = WrapAngle(phase_remainder_l);
+		phase_remainder_r = WrapAngle(phase_remainder_r);
 
-		PrevPhasesL[index]  = l;
-		PrevPhasesR[index]  = r;
+		//Assert(phase_remainder_l >= (float)-MATH_PI && phase_remainder_l <= (float)MATH_PI);
+		//Assert(phase_remainder_r >= (float)-MATH_PI && phase_remainder_r <= (float)MATH_PI);
+
+		float frequency_deviation_l = (float)FFTLength * phase_remainder_l / (2.0f * (float)MATH_PI * (float)HopLength);
+		float frequency_deviation_r = (float)FFTLength * phase_remainder_r / (2.0f * (float)MATH_PI * (float)HopLength);
+
+		float expected_frequency = (float)index;
+
+		float actual_frequency_left = expected_frequency + frequency_deviation_l;
+		float actual_frequency_right = expected_frequency + frequency_deviation_r;
+
+		DetectedFrequenciesL[index] = actual_frequency_left;
+		DetectedFrequenciesR[index] = actual_frequency_right;
+
+		PrevPhasesL[index]  = phase_left;
+		PrevPhasesR[index]  = phase_right;
 
 		if (AmplitudesL[index] > max_amp_left) {
 			max_amp_left = AmplitudesL[index];
@@ -746,7 +769,7 @@ void Update(float window_w, float window_h, void *data) {
 }
 
 WaveForm GenerateSineWave(float freq, float amp) {
-	uint samples = 2 * 48000 / (uint)freq;
+	uint samples = 2 * 2 * 48000 / (uint)freq;
 
 	float dt = 1.0f / 48000.0f;
 
@@ -807,9 +830,24 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 	InitWindow();
 	ClearHistory();
 
-	WaveForms = (WaveForm *)malloc(argc * sizeof(WaveForm));
+	int cap_waveforms = argc * 100;
 
+	WaveForms = (WaveForm *)malloc(cap_waveforms * sizeof(WaveForm));
+
+	//WaveForms[WaveFormCount++] = GenerateSineWave(5, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(10, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(15, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(20, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(25, 0.5f);
+	WaveForms[WaveFormCount++] = GenerateSineWave(30, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(45, 0.5f);
 	WaveForms[WaveFormCount++] = GenerateSineWave(60, 0.5f);
+	WaveForms[WaveFormCount++] = GenerateSineWave(120, 0.5f);
+	WaveForms[WaveFormCount++] = GenerateSineWave(240, 0.5f);
+	WaveForms[WaveFormCount++] = GenerateSineWave(512, 0.5f);
+	WaveForms[WaveFormCount++] = GenerateSineWave(1024, 0.5f);
+	WaveForms[WaveFormCount++] = GenerateSineWave(2048, 0.5f);
+	WaveForms[WaveFormCount++] = GenerateSineWave(4096, 0.5f);
 
 	for (int i = 1; i < argc; ++i) {
 		const char *path = argv[i];
