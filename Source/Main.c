@@ -52,16 +52,8 @@ float Wrap(float min, float a, float max) {
 }
 
 float WrapAngle(float radians) {
-	/*const float pi = (float)MATH_PI;
-	while (radians > pi) {
-		radians -= pi;
-	}
-	while (radians < -pi) {
-		radians += pi;
-	}
-	return radians;*/
-
-	return Wrap((float)-MATH_PI, radians, (float)MATH_PI);
+	const float pi = (float)MATH_PI;
+	return Wrap(-pi, radians, pi);
 }
 
 float ComplexLengthSq(Complex c) {
@@ -153,7 +145,7 @@ void CalcCoefficients(float freq) {
 void NextWaveForm();
 void PrevWaveForm();
 
-#define FFT_LENGTH    1024
+#define FFT_LENGTH    2048
 #define WINDOW_LENGTH 1024
 #define HOP_LENGTH    512
 
@@ -279,6 +271,8 @@ void Process(const KrAudioSpec *spec) {
 
 		float actual_frequency_left = expected_frequency + frequency_deviation_l;
 		float actual_frequency_right = expected_frequency + frequency_deviation_r;
+
+		//Assert(actual_frequency_left >= 0.0f && actual_frequency_right  >= 0.0f);
 
 		DetectedFrequenciesL[index] = actual_frequency_left;
 		DetectedFrequenciesR[index] = actual_frequency_right;
