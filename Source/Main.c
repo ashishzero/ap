@@ -24,7 +24,7 @@ struct {
 	uint     Last;
 	float    Volume;
 	float    Frequency;
-	float    FreqRatio;
+	//float    FreqRatio;
 	float    PitchShift;
 
 	// Rendering data
@@ -195,13 +195,13 @@ void Transform(Complex *buf, uint length) {
 		float pi    = (float)MATH_PI;
 
 		// whisper
-		float phase = 2.0f * (float)MATH_PI * (float)rand() / (float)RAND_MAX;
-		buf[i].re   = a * cosf(phase);
-		buf[i].im   = a * sinf(phase);
+		//float phase = 2.0f * (float)MATH_PI * (float)rand() / (float)RAND_MAX;
+		//buf[i].re   = a * cosf(phase);
+		//buf[i].im   = a * sinf(phase);
 
 		// robotize
-		//buf[i].re   = a;
-		//buf[i].im   = 0.0f;
+		buf[i].re   = a;
+		buf[i].im   = 0.0f;
 	}
 }
 
@@ -215,9 +215,13 @@ void Process(const KrAudioSpec *spec) {
 
 	memcpy(InputFrames, InputFrames + HopLength, (InputFrameLength - HopLength) * sizeof(F32FrameStereo));
 
+	float pitch_shift = powf(2.0f, G.PitchShift / 16.0f);
+	float freq_ratio  = 1.0f;
+
 	for (int index = InputFrameLength - HopLength; index < WindowLength; ++index) {
 		InputFrames[index] = LoadFrame(src, G.Pos, G.Last);
-		G.Pos += (G.FreqRatio * G.Frequency / (float)spec->Frequency);
+
+		G.Pos += (freq_ratio * G.Frequency / (float)spec->Frequency);
 
 		// repeat for now
 		G.Pos = Wrap(0.0f, G.Pos, (float)G.Last);
@@ -310,7 +314,6 @@ void Process(const KrAudioSpec *spec) {
 
 #if 1
 	// Shift the pitch
-	float pitch_shift = powf(2.0f, G.PitchShift / 12.0f);
 	for (int i = 0; i <= FFTLength/2; ++i) {
 		int bin = (int)floorf(i * pitch_shift + 0.5f);
 
@@ -581,10 +584,10 @@ void HandleEvent(const KrEvent *event, void *user) {
 		}
 
 		if (event->Key.Code == KrKey_Plus) {
-			G.PitchShift += 1.0f;
+			G.PitchShift += 0.5f;
 			printf("PitchShift = %f\n", G.PitchShift);
 		} else if (event->Key.Code == KrKey_Minus) {
-			G.PitchShift -= 1.0f;
+			G.PitchShift -= 0.5f;
 			printf("PitchShift = %f\n", G.PitchShift);
 		}
 
@@ -916,7 +919,7 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 	}
 
 	G.Volume     = 1;
-	G.FreqRatio  = 1;
+	//G.FreqRatio  = 1;
 	G.PitchShift = 0;
 
 	ResetWaveform();
