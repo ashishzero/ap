@@ -188,7 +188,8 @@ void InitWindow() {
 }
 
 void Transform(Complex *buf, uint length) {
-	if (!ApplyTransformation) return;
+	return;
+	//if (!ApplyTransformation) return;
 
 	for (uint i = 0; i < length; ++i) {
 		float a     = sqrtf(buf[i].re * buf[i].re + buf[i].im * buf[i].im);
@@ -262,19 +263,21 @@ void Process(const KrAudioSpec *spec) {
 		phases[0]     = atan2f(FFTBufferL[index].im, FFTBufferL[index].re);
 		phases[1]     = atan2f(FFTBufferR[index].im, FFTBufferR[index].re);
 
-		float center_phase_shift   = 2.0f * (float)MATH_PI * (float)index * (float)HopLength / (float)FFTLength;
-		float actual_phase_shift_l = phases[0] - LastInputPhasesL[index];
-		float actual_phase_shift_r = phases[1] - LastInputPhasesR[index];
+		float center_bin_freq = 2.0f * (float)MATH_PI * (float)index / (float)FFTLength;
+		float phase_diff_l = phases[0] - LastInputPhasesL[index];
+		float phase_diff_r = phases[1] - LastInputPhasesR[index];
 
-		float phase_remainder_l = WrapAngle(actual_phase_shift_l - center_phase_shift);
-		float phase_remainder_r = WrapAngle(actual_phase_shift_r - center_phase_shift);
+		phase_diff_l = WrapAngle(phase_diff_l - center_bin_freq * (float)HopLength);
+		phase_diff_r = WrapAngle(phase_diff_r - center_bin_freq * (float)HopLength);
 
-		float deviation_factor = (float)FFTLength / (2.0f * (float)MATH_PI * (float)HopLength);
-		float deviation_l      = phase_remainder_l * deviation_factor;
-		float deviation_r      = phase_remainder_r * deviation_factor;
+		float deviation_l      = phase_diff_l / (float)HopLength;
+		float deviation_r      = phase_diff_r / (float)HopLength;
 
-		AnalysisFrequenciesL[index] = (float)index + deviation_l;
-		AnalysisFrequenciesR[index] = (float)index + deviation_r;
+
+		float freq = 2.0f * (float)MATH_PI * (float)index / (float)FFTLength;
+
+		AnalysisFrequenciesL[index] = freq + deviation_l;
+		AnalysisFrequenciesR[index] = freq + deviation_r;
 
 		AnalysisMagnitudesL[index] = amplitudes[0];
 		AnalysisMagnitudesR[index] = amplitudes[1];
@@ -299,8 +302,8 @@ void Process(const KrAudioSpec *spec) {
 			}
 		}
 
-		float freq_l = freqs[0] * spec->Frequency / (float)FFTLength;
-		float freq_r = freqs[1] * spec->Frequency / (float)FFTLength;
+		float freq_l = freqs[0] * spec->Frequency / (2.0f * (float)MATH_PI);
+		float freq_r = freqs[1] * spec->Frequency / (2.0f * (float)MATH_PI);
 
 		//printf("Freq Left: %f, Freq Right: %f\n", freq_l, freq_r);
 	}
@@ -315,13 +318,50 @@ void Process(const KrAudioSpec *spec) {
 #if 1
 	// Shift the pitch
 	for (int i = 0; i <= FFTLength/2; ++i) {
-		int bin = (int)floorf(i * pitch_shift + 0.5f);
+		if (ApplyTransformation) {
+			// robotize
+			float robot_base_freq = 120.0f;
+			float harmonic_l = floorf(AnalysisFrequenciesL[i] * spec->Frequency / (2.0f * (float)MATH_PI) / robot_base_freq + 0.5f);
+			float harmonic_r = floorf(AnalysisFrequenciesR[i] * spec->Frequency / (2.0f * (float)MATH_PI) / robot_base_freq + 0.5f);
 
-		if (bin <= FFTLength/2) {
-			SynthesisMagnitudesL[bin] += AnalysisMagnitudesL[i];
-			SynthesisMagnitudesR[bin] += AnalysisMagnitudesR[i];
-			SynthesisFrequenciesL[bin] = pitch_shift * AnalysisFrequenciesL[i];
-			SynthesisFrequenciesR[bin] = pitch_shift * AnalysisFrequenciesR[i];
+			if (harmonic_l > 0) {
+				float harmonic_freq = robot_base_freq * (2.0f * (float)MATH_PI / spec->Frequency) * harmonic_l;
+
+				int bin = (int)floorf(harmonic_freq * (float)FFTLength / (2.0f * (float)MATH_PI) + 0.5f);
+
+				if (bin <= FFTLength/2) {
+					SynthesisMagnitudesL[bin] += AnalysisMagnitudesL[i];
+					SynthesisFrequenciesL[bin] = harmonic_freq;
+				}
+			}
+
+			if (harmonic_r > 0) {
+				float harmonic_freq = robot_base_freq * (2.0f * (float)MATH_PI / spec->Frequency) * harmonic_r;
+
+				int bin = (int)floorf(harmonic_freq * (float)FFTLength / (2.0f * (float)MATH_PI) + 0.5f);
+
+				if (bin <= FFTLength/2) {
+					SynthesisMagnitudesR[bin] += AnalysisMagnitudesR[i];
+					SynthesisFrequenciesR[bin] = harmonic_freq;
+				}
+			}
+		} else {
+			int bin = (int)floorf(i * pitch_shift + 0.5f);
+
+			// TODOS: 
+			// - peak tracking algorithm
+			// - combine frequency detector with pitch shift to implement auto-tuning
+			// - cross systhesis
+			// - noise reduction
+			if (bin <= FFTLength/2) {
+				// TODO: Use RMS to add these
+				SynthesisMagnitudesL[bin] += AnalysisMagnitudesL[i];
+				SynthesisMagnitudesR[bin] += AnalysisMagnitudesR[i];
+
+				// TODO: Weighted average here
+				SynthesisFrequenciesL[bin] = pitch_shift * AnalysisFrequenciesL[i];
+				SynthesisFrequenciesR[bin] = pitch_shift * AnalysisFrequenciesR[i];
+			}
 		}
 	}
 
@@ -330,20 +370,20 @@ void Process(const KrAudioSpec *spec) {
 		amplitudes[0] = SynthesisMagnitudesL[index];
 		amplitudes[1] = SynthesisMagnitudesR[index];
 
-		float deviation_l = SynthesisFrequenciesL[index] - (float)index;
-		float deviation_r = SynthesisFrequenciesR[index] - (float)index;
+		float freq = 2.0f * (float)MATH_PI * (float)index / (float)FFTLength; 
 
-		float deviation_factor = 2.0f * (float)MATH_PI * (float)HopLength / (float)FFTLength;
+		float deviation_l = SynthesisFrequenciesL[index] - freq;
+		float deviation_r = SynthesisFrequenciesR[index] - freq;
 
-		float phase_remainder_l = deviation_l * deviation_factor;
-		float phase_remainder_r = deviation_r * deviation_factor;
+		float phase_diff_l = deviation_l * (float)HopLength;
+		float phase_diff_r = deviation_r * (float)HopLength;
 
-		float center_phase_shift = 2.0f * (float)MATH_PI * (float)index * (float)HopLength / (float)FFTLength;
-		float phase_shift_l = phase_remainder_l + center_phase_shift;
-		float phase_shift_r = phase_remainder_r + center_phase_shift;
+		float center_bin_freq = 2.0f * (float)MATH_PI * (float)index / (float)FFTLength;
+		phase_diff_l += center_bin_freq * (float)HopLength;
+		phase_diff_r += center_bin_freq * (float)HopLength;
 
-		phases[0] = WrapAngle(LastOutputPhasesL[index] + phase_shift_l);
-		phases[1] = WrapAngle(LastOutputPhasesR[index] + phase_shift_r);
+		phases[0] = WrapAngle(LastOutputPhasesL[index] + phase_diff_l);
+		phases[1] = WrapAngle(LastOutputPhasesR[index] + phase_diff_r);
 
 		FFTBufferL[index].re = amplitudes[0] * cosf(phases[0]);
 		FFTBufferL[index].im = amplitudes[0] * sinf(phases[0]);
