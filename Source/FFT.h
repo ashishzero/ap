@@ -1,6 +1,8 @@
 #pragma once
 #include "KrPlatform.h"
 
+#define MATH_PI    3.14159265359
+
 typedef struct Complex {
 	real re;
 	real im;

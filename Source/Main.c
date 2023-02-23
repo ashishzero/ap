@@ -23,6 +23,7 @@ struct {
 	float    Pos;
 	uint     Last;
 	float    Volume;
+	float    Frequency;
 	float    FreqRatio;
 
 	// Rendering data
@@ -43,13 +44,23 @@ typedef struct F32FrameStereo {
 	float Right;
 } F32FrameStereo;
 
-static uint InFreq = 0; // @todo: cleanup
-
 float Wrap(float min, float a, float max) {
 	float range  = max - min;
 	float offset = a - min;
 	float result = (offset - (floorf(offset / range) * range) + min);
 	return result;
+}
+
+float WrapAngle(float radians) {
+	return Wrap((float)-MATH_PI, radians, (float)MATH_PI);
+}
+
+float ComplexLengthSq(Complex c) {
+	return c.re * c.re + c.im * c.im;
+}
+
+float ComplexLength(Complex c) {
+	return sqrtf(ComplexLengthSq(c));
 }
 
 float MapRange(float in_a, float in_b, float out_a, float out_b, float v) {
@@ -133,7 +144,7 @@ void CalcCoefficients(float freq) {
 void NextWaveForm();
 void PrevWaveForm();
 
-#define FFT_LENGTH    2048
+#define FFT_LENGTH    1024
 #define WINDOW_LENGTH 1024
 #define HOP_LENGTH    512
 
@@ -149,7 +160,22 @@ static Complex        FFTBufferR[FFT_LENGTH];
 static F32FrameStereo OutputFrames[WINDOW_LENGTH];
 static int            OutputFramePos = HOP_LENGTH;
 
+static float          PrevPhasesL[FFT_LENGTH/2 + 1];
+static float          PrevPhasesR[FFT_LENGTH/2 + 1];
+static float          DetectedFrequenciesL[FFT_LENGTH/2 + 1];
+static float          DetectedFrequenciesR[FFT_LENGTH/2 + 1];
+static float          AmplitudesL[FFT_LENGTH/2 + 1];
+static float          AmplitudesR[FFT_LENGTH/2 + 1];
+
+static float          HanWindow[WINDOW_LENGTH];
+
 static bool ApplyTransformation = false;
+
+void InitWindow() {
+	for (int i = 0; i < WindowLength; ++i) {
+		HanWindow[i] = 0.5f * (1.0f - cosf(2 * (float)MATH_PI * (float)i / (float)(WindowLength - 1)));
+	}
+}
 
 void Transform(Complex *buf, uint length) {
 	if (!ApplyTransformation) return;
@@ -174,21 +200,24 @@ void Process(const KrAudioSpec *spec) {
 
 	for (int index = InputFrameLength - HopLength; index < WindowLength; ++index) {
 		InputFrames[index] = LoadFrame(src, G.Pos, G.Last);
-		G.Pos += (G.FreqRatio * (float)InFreq / (float)spec->Frequency);
+		G.Pos += (G.FreqRatio * G.Frequency / (float)spec->Frequency);
+
+		// repeat for now
+		G.Pos = Wrap(0.0f, G.Pos, (float)G.Last);
 
 		// TODO: correct transition
-		if (G.Pos <= 0.0f) {
-			PrevWaveForm();
-		} else if (G.Pos >= G.Last) {
-			NextWaveForm();
-		}
+		//if (G.Pos <= 0.0f) {
+		//	PrevWaveForm();
+		//} else if (G.Pos >= G.Last) {
+		//	NextWaveForm();
+		//}
 	}
 
 	Assert(InputFrameLength >= WindowLength);
 
 	for (int index = 0; index < WindowLength; ++index) {
-		FFTBufferL[index].re = InputFrames[index].Left;
-		FFTBufferR[index].re = InputFrames[index].Right;
+		FFTBufferL[index].re = HanWindow[index] * InputFrames[index].Left;
+		FFTBufferR[index].re = HanWindow[index] * InputFrames[index].Right;
 		FFTBufferL[index].im = 0.0f;
 		FFTBufferR[index].im = 0.0f;
 	}
@@ -204,6 +233,50 @@ void Process(const KrAudioSpec *spec) {
 
 	Transform(FFTBufferL, FFTLength);
 	Transform(FFTBufferR, FFTLength);
+
+	int max_amp_left_index  = 0;
+	int max_amp_right_index = 0;
+
+	float max_amp_left  = 0.0f;
+	float max_amp_right = 0.0f;
+
+	for (int index = 0; index <= FFTLength/2; ++index) {
+		AmplitudesL[index] = ComplexLength(FFTBufferL[index]);
+		AmplitudesR[index] = ComplexLength(FFTBufferR[index]);
+
+		float l = atan2f(FFTBufferL[index].im, FFTBufferL[index].re);
+		float r = atan2f(FFTBufferR[index].im, FFTBufferR[index].re);
+
+		// WTF did we do here??
+		float center = 2.0f * (float)MATH_PI * (float)index / (float)FFTLength;
+		float expected = center * (float)HopLength;
+
+		float diff_l = WrapAngle(l - PrevPhasesL[index] - expected);
+		float diff_r = WrapAngle(r - PrevPhasesR[index] - expected);
+
+		float deviation_l = diff_l * (float)FFTLength / (float)HopLength / (2.0f * (float)MATH_PI);
+		float deviation_r = diff_r * (float)FFTLength / (float)HopLength / (2.0f * (float)MATH_PI);
+
+		DetectedFrequenciesL[index] = (float)index + deviation_l;
+		DetectedFrequenciesR[index] = (float)index + deviation_r;
+
+		PrevPhasesL[index]  = l;
+		PrevPhasesR[index]  = r;
+
+		if (AmplitudesL[index] > max_amp_left) {
+			max_amp_left = AmplitudesL[index];
+			max_amp_left_index = index;
+		}
+
+		if (AmplitudesR[index] > max_amp_right) {
+			max_amp_right = AmplitudesR[index];
+			max_amp_right_index = index;
+		}
+	}
+
+	printf("Freq Left: %f, Freq Right: %f\n",
+		spec->Frequency * DetectedFrequenciesL[max_amp_left_index] / (float)FFTLength,
+		spec->Frequency * DetectedFrequenciesR[max_amp_right_index] / (float)FFTLength);
 
 	InplaceInvFFT(FFTBufferL, FFTLength);
 	InplaceInvFFT(FFTBufferR, FFTLength);
@@ -336,11 +409,17 @@ typedef struct Audio_Stream {
 
 #pragma pack(pop)
 
-static uint           WaveFormIndex;
-static uint           WaveFormCount;
-static Audio_Stream **WaveForms;
+typedef struct WaveForm {
+	float Frequency;
+	uint  Count;
+	i16 * Frames;
+} WaveForm;
 
-i16 *Serialize(Audio_Stream *audio, uint *count, uint *freq) {
+static uint       WaveFormIndex;
+static uint       WaveFormCount;
+static WaveForm  *WaveForms;
+
+WaveForm Serialize(Audio_Stream *audio) {
 	Wave_Data *ptr = &audio->data;
 	for (; ptr->id[0] == 'L';) {
 		uint sz = ptr->size;
@@ -348,26 +427,29 @@ i16 *Serialize(Audio_Stream *audio, uint *count, uint *freq) {
 		ptr = (Wave_Data *)((u8 *)ptr + sz);
 	}
 
-	*count = ptr->size / sizeof(i16);
-	*count /= audio->fmt.channels_count;
+	return (WaveForm) {
+		.Frequency = (float)audio->fmt.sample_rate,
+		.Count = ptr->size / sizeof(i16) / audio->fmt.channels_count,
+		.Frames = (i16 *)(ptr + 1)
+	};
+}
 
-	*freq = audio->fmt.sample_rate;
-
-	return (i16 *)(ptr + 1);
+void ResetWaveform() {
+	ClearHistory();
+	G.Pos       = 0;
+	G.Frames    = WaveForms[WaveFormIndex].Frames;
+	G.Last      = WaveForms[WaveFormIndex].Count;
+	G.Frequency = WaveForms[WaveFormIndex].Frequency;
 }
 
 void NextWaveForm() {
 	WaveFormIndex = (WaveFormIndex + 1) % WaveFormCount;
-	G.Pos = 0;
-	ClearHistory();
-	G.Frames = Serialize(WaveForms[WaveFormIndex], &G.Last, &InFreq);
+	ResetWaveform();
 }
 
 void PrevWaveForm() {
 	WaveFormIndex = (WaveFormIndex - 1) % WaveFormCount;
-	G.Pos = 0;
-	ClearHistory();
-	G.Frames = Serialize(WaveForms[WaveFormIndex], &G.Last, &InFreq);
+	ResetWaveform();
 }
 
 void HandleEvent(const KrEvent *event, void *user) {
@@ -663,7 +745,7 @@ void Update(float window_w, float window_h, void *data) {
 	//PL_DrawQuad(pause_button1.p0, pause_button1.p1, pause_button1.p2, pause_button1.p3, progress_fg, progress_fg, progress_fg, progress_fg);
 }
 
-i16 *GenerateSineWave(float freq, uint *count) {
+WaveForm GenerateSineWave(float freq, float amp) {
 	uint samples = 2 * 48000 / (uint)freq;
 
 	float dt = 1.0f / 48000.0f;
@@ -673,7 +755,7 @@ i16 *GenerateSineWave(float freq, uint *count) {
 
 	float t = 0;
 	for (uint i = 0; i < samples; i += 2) {
-		float s = 32767.0f * sinf(2.0f * 3.14f * freq * t);
+		float s = 32767.0f * amp * sinf(2.0f * 3.14f * freq * t);
 
 		i16 quantized = (i16)s;
 		data[i + 0] = quantized;
@@ -682,9 +764,11 @@ i16 *GenerateSineWave(float freq, uint *count) {
 		t += dt;
 	}
 
-	*count = samples / 2;
-
-	return data;
+	return (WaveForm) {
+		.Frames    = data,
+		.Count     = samples / 2,
+		.Frequency = 48000.0f
+	};
 }
 
 int Main(int argc, char **argv, KrUserContext *ctx) {
@@ -720,21 +804,25 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 		Usage(argv[0]);
 	}
 
+	InitWindow();
 	ClearHistory();
 
-	WaveForms = (Audio_Stream **)malloc(argc * sizeof(Audio_Stream *));
+	WaveForms = (WaveForm *)malloc(argc * sizeof(WaveForm));
+
+	WaveForms[WaveFormCount++] = GenerateSineWave(60, 0.5f);
 
 	for (int i = 1; i < argc; ++i) {
 		const char *path = argv[i];
 
 		umem size = 0;
 		u8 *buff  = ReadEntireFile(path, &size);
-		WaveForms[WaveFormCount++] = (Audio_Stream *)buff;
+		WaveForms[WaveFormCount++] = Serialize((Audio_Stream *)buff);
 	}
 
 	G.Volume    = 1;
 	G.FreqRatio = 1;
-	G.Frames    = Serialize(WaveForms[WaveFormIndex], &G.Last, &InFreq);
+
+	ResetWaveform();
 
 	ctx->OnEvent = HandleEvent;
 	ctx->OnUpdate = Update;

@@ -3,8 +3,6 @@
 
 #include <math.h>
 
-#define MATH_PI    3.14159265359
-
 //
 // Complex Number Utilities
 //
