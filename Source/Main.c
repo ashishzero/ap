@@ -25,6 +25,7 @@ struct {
 	float    Volume;
 	float    Frequency;
 	float    FreqRatio;
+	float    PitchShift;
 
 	// Rendering data
 	uint              RenderBufIndex;
@@ -145,9 +146,9 @@ void CalcCoefficients(float freq) {
 void NextWaveForm();
 void PrevWaveForm();
 
-#define FFT_LENGTH    2048
+#define FFT_LENGTH    1024
 #define WINDOW_LENGTH 1024
-#define HOP_LENGTH    512
+#define HOP_LENGTH    (WINDOW_LENGTH/8)
 
 static const int WindowLength         = WINDOW_LENGTH;
 static const int HopLength            = HOP_LENGTH;
@@ -161,12 +162,20 @@ static Complex        FFTBufferR[FFT_LENGTH];
 static F32FrameStereo OutputFrames[WINDOW_LENGTH];
 static int            OutputFramePos = HOP_LENGTH;
 
-static float          PrevPhasesL[FFT_LENGTH/2 + 1];
-static float          PrevPhasesR[FFT_LENGTH/2 + 1];
-static float          DetectedFrequenciesL[FFT_LENGTH/2 + 1];
-static float          DetectedFrequenciesR[FFT_LENGTH/2 + 1];
-static float          AmplitudesL[FFT_LENGTH/2 + 1];
-static float          AmplitudesR[FFT_LENGTH/2 + 1];
+static float          LastInputPhasesL[FFT_LENGTH];
+static float          LastInputPhasesR[FFT_LENGTH];
+static float          LastOutputPhasesL[FFT_LENGTH];
+static float          LastOutputPhasesR[FFT_LENGTH];
+
+static float          SynthesisMagnitudesL[FFT_LENGTH/2 + 1];
+static float          SynthesisMagnitudesR[FFT_LENGTH/2 + 1];
+static float          SynthesisFrequenciesL[FFT_LENGTH/2 + 1];
+static float          SynthesisFrequenciesR[FFT_LENGTH/2 + 1];
+
+static float          AnalysisMagnitudesL[FFT_LENGTH/2 + 1];
+static float          AnalysisMagnitudesR[FFT_LENGTH/2 + 1];
+static float          AnalysisFrequenciesL[FFT_LENGTH/2 + 1];
+static float          AnalysisFrequenciesR[FFT_LENGTH/2 + 1];
 
 static float          HanWindow[WINDOW_LENGTH];
 
@@ -181,11 +190,18 @@ void InitWindow() {
 void Transform(Complex *buf, uint length) {
 	if (!ApplyTransformation) return;
 
-	// robotize
 	for (uint i = 0; i < length; ++i) {
-		float a   = sqrtf(buf[i].re * buf[i].re + buf[i].im * buf[i].im);
-		buf[i].re = a;
-		buf[i].im = 0.0f;
+		float a     = sqrtf(buf[i].re * buf[i].re + buf[i].im * buf[i].im);
+		float pi    = (float)MATH_PI;
+
+		// whisper
+		float phase = 2.0f * (float)MATH_PI * (float)rand() / (float)RAND_MAX;
+		buf[i].re   = a * cosf(phase);
+		buf[i].im   = a * sinf(phase);
+
+		// robotize
+		//buf[i].re   = a;
+		//buf[i].im   = 0.0f;
 	}
 }
 
@@ -235,65 +251,111 @@ void Process(const KrAudioSpec *spec) {
 	Transform(FFTBufferL, FFTLength);
 	Transform(FFTBufferR, FFTLength);
 
-	int max_amp_left_index  = 0;
-	int max_amp_right_index = 0;
-
-	float max_amp_left  = 0.0f;
-	float max_amp_right = 0.0f;
-
 	for (int index = 0; index <= FFTLength/2; ++index) {
-		AmplitudesL[index] = ComplexLength(FFTBufferL[index]);
-		AmplitudesR[index] = ComplexLength(FFTBufferR[index]);
+		float amplitudes[2], phases[2];
+		amplitudes[0] = ComplexLength(FFTBufferL[index]);
+		amplitudes[1] = ComplexLength(FFTBufferR[index]);
+		phases[0]     = atan2f(FFTBufferL[index].im, FFTBufferL[index].re);
+		phases[1]     = atan2f(FFTBufferR[index].im, FFTBufferR[index].re);
 
-		float phase_left  = atan2f(FFTBufferL[index].im, FFTBufferL[index].re);
-		float phase_right = atan2f(FFTBufferR[index].im, FFTBufferR[index].re);
+		float center_phase_shift   = 2.0f * (float)MATH_PI * (float)index * (float)HopLength / (float)FFTLength;
+		float actual_phase_shift_l = phases[0] - LastInputPhasesL[index];
+		float actual_phase_shift_r = phases[1] - LastInputPhasesR[index];
 
-		float prev_phase_left  = PrevPhasesL[index];
-		float prev_phase_right = PrevPhasesR[index];
+		float phase_remainder_l = WrapAngle(actual_phase_shift_l - center_phase_shift);
+		float phase_remainder_r = WrapAngle(actual_phase_shift_r - center_phase_shift);
 
-		float expected_phase_shift = 2.0f * (float)MATH_PI * (float)index * (float)HopLength / (float)FFTLength;
-		float actual_phase_shift_l = phase_left - prev_phase_left;
-		float actual_phase_shift_r = phase_right - prev_phase_right;
+		float deviation_factor = (float)FFTLength / (2.0f * (float)MATH_PI * (float)HopLength);
+		float deviation_l      = phase_remainder_l * deviation_factor;
+		float deviation_r      = phase_remainder_r * deviation_factor;
 
-		float phase_remainder_l = actual_phase_shift_l - expected_phase_shift;
-		float phase_remainder_r = actual_phase_shift_r - expected_phase_shift;
+		AnalysisFrequenciesL[index] = (float)index + deviation_l;
+		AnalysisFrequenciesR[index] = (float)index + deviation_r;
 
-		phase_remainder_l = WrapAngle(phase_remainder_l);
-		phase_remainder_r = WrapAngle(phase_remainder_r);
+		AnalysisMagnitudesL[index] = amplitudes[0];
+		AnalysisMagnitudesR[index] = amplitudes[1];
 
-		//Assert(phase_remainder_l >= (float)-MATH_PI && phase_remainder_l <= (float)MATH_PI);
-		//Assert(phase_remainder_r >= (float)-MATH_PI && phase_remainder_r <= (float)MATH_PI);
+		LastInputPhasesL[index] = phases[0];
+		LastInputPhasesR[index] = phases[1];
+	}
 
-		float frequency_deviation_l = (float)FFTLength * phase_remainder_l / (2.0f * (float)MATH_PI * (float)HopLength);
-		float frequency_deviation_r = (float)FFTLength * phase_remainder_r / (2.0f * (float)MATH_PI * (float)HopLength);
+	{
+		float freqs[2] = {0,0};
+		float mags[2]  = {0,0};
 
-		float expected_frequency = (float)index;
+		for (int index = 0; index <= FFTLength/2; ++index) {
+			if (AnalysisMagnitudesL[index] > mags[0]) {
+				mags[0]  = AnalysisMagnitudesL[index];
+				freqs[0] = AnalysisFrequenciesL[index];
+			}
 
-		float actual_frequency_left = expected_frequency + frequency_deviation_l;
-		float actual_frequency_right = expected_frequency + frequency_deviation_r;
-
-		//Assert(actual_frequency_left >= 0.0f && actual_frequency_right  >= 0.0f);
-
-		DetectedFrequenciesL[index] = actual_frequency_left;
-		DetectedFrequenciesR[index] = actual_frequency_right;
-
-		PrevPhasesL[index]  = phase_left;
-		PrevPhasesR[index]  = phase_right;
-
-		if (AmplitudesL[index] > max_amp_left) {
-			max_amp_left = AmplitudesL[index];
-			max_amp_left_index = index;
+			if (AnalysisMagnitudesL[index] > mags[1]) {
+				mags[1]  = AnalysisMagnitudesR[index];
+				freqs[1] = AnalysisFrequenciesR[index];
+			}
 		}
 
-		if (AmplitudesR[index] > max_amp_right) {
-			max_amp_right = AmplitudesR[index];
-			max_amp_right_index = index;
+		float freq_l = freqs[0] * spec->Frequency / (float)FFTLength;
+		float freq_r = freqs[1] * spec->Frequency / (float)FFTLength;
+
+		//printf("Freq Left: %f, Freq Right: %f\n", freq_l, freq_r);
+	}
+
+	for (int i = 0; i <= FFTLength/2; ++i) {
+		SynthesisMagnitudesL[i]  = 0;
+		SynthesisMagnitudesR[i]  = 0;
+		SynthesisFrequenciesL[i] = 0;
+		SynthesisFrequenciesR[i] = 0;
+	}
+
+#if 1
+	// Shift the pitch
+	float pitch_shift = powf(2.0f, G.PitchShift / 12.0f);
+	for (int i = 0; i <= FFTLength/2; ++i) {
+		int bin = (int)floorf(i * pitch_shift + 0.5f);
+
+		if (bin <= FFTLength/2) {
+			SynthesisMagnitudesL[bin] += AnalysisMagnitudesL[i];
+			SynthesisMagnitudesR[bin] += AnalysisMagnitudesR[i];
+			SynthesisFrequenciesL[bin] = pitch_shift * AnalysisFrequenciesL[i];
+			SynthesisFrequenciesR[bin] = pitch_shift * AnalysisFrequenciesR[i];
 		}
 	}
 
-	printf("Freq Left: %f, Freq Right: %f\n",
-		spec->Frequency * DetectedFrequenciesL[max_amp_left_index] / (float)FFTLength,
-		spec->Frequency * DetectedFrequenciesR[max_amp_right_index] / (float)FFTLength);
+	for (int index = 0; index <= FFTLength/2; ++index) {
+		float amplitudes[2], phases[2];
+		amplitudes[0] = SynthesisMagnitudesL[index];
+		amplitudes[1] = SynthesisMagnitudesR[index];
+
+		float deviation_l = SynthesisFrequenciesL[index] - (float)index;
+		float deviation_r = SynthesisFrequenciesR[index] - (float)index;
+
+		float deviation_factor = 2.0f * (float)MATH_PI * (float)HopLength / (float)FFTLength;
+
+		float phase_remainder_l = deviation_l * deviation_factor;
+		float phase_remainder_r = deviation_r * deviation_factor;
+
+		float center_phase_shift = 2.0f * (float)MATH_PI * (float)index * (float)HopLength / (float)FFTLength;
+		float phase_shift_l = phase_remainder_l + center_phase_shift;
+		float phase_shift_r = phase_remainder_r + center_phase_shift;
+
+		phases[0] = WrapAngle(LastOutputPhasesL[index] + phase_shift_l);
+		phases[1] = WrapAngle(LastOutputPhasesR[index] + phase_shift_r);
+
+		FFTBufferL[index].re = amplitudes[0] * cosf(phases[0]);
+		FFTBufferL[index].im = amplitudes[0] * sinf(phases[0]);
+		FFTBufferR[index].re = amplitudes[1] * cosf(phases[1]);
+		FFTBufferR[index].im = amplitudes[1] * sinf(phases[1]);
+
+		if (index > 0 && index < FFTLength/2) {
+			FFTBufferL[FFTLength - index] = (Complex){ .re = FFTBufferL[index].re,.im = -FFTBufferL[index].im };
+			FFTBufferR[FFTLength - index] = (Complex){ .re = FFTBufferR[index].re,.im = -FFTBufferR[index].im };
+		}
+
+		LastOutputPhasesL[index] = phases[0];
+		LastOutputPhasesR[index] = phases[1];
+	}
+#endif
 
 	InplaceInvFFT(FFTBufferL, FFTLength);
 	InplaceInvFFT(FFTBufferR, FFTLength);
@@ -302,8 +364,8 @@ void Process(const KrAudioSpec *spec) {
 	memset(OutputFrames + OutputFrameLength - HopLength, 0, HopLength * sizeof(F32FrameStereo));
 
 	for (int index = 0; index < WindowLength; ++index) {
-		OutputFrames[index].Left += FFTBufferL[index].re;
-		OutputFrames[index].Right += FFTBufferR[index].re;
+		OutputFrames[index].Left += HanWindow[index] * FFTBufferL[index].re;
+		OutputFrames[index].Right += HanWindow[index] * FFTBufferR[index].re;
 	}
 }
 
@@ -519,11 +581,11 @@ void HandleEvent(const KrEvent *event, void *user) {
 		}
 
 		if (event->Key.Code == KrKey_Plus) {
-			G.FreqRatio += 0.1f;
-			printf("FreqRatio = %f\n", G.FreqRatio);
+			G.PitchShift += 1.0f;
+			printf("PitchShift = %f\n", G.PitchShift);
 		} else if (event->Key.Code == KrKey_Minus) {
-			G.FreqRatio -= 0.1f;
-			printf("FreqRatio = %f\n", G.FreqRatio);
+			G.PitchShift -= 1.0f;
+			printf("PitchShift = %f\n", G.PitchShift);
 		}
 
 		if (event->Key.Code == KrKey_N) {
@@ -833,15 +895,17 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 	//WaveForms[WaveFormCount++] = GenerateSineWave(15, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(20, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(25, 0.5f);
-	WaveForms[WaveFormCount++] = GenerateSineWave(30, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(30, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(45, 0.5f);
-	WaveForms[WaveFormCount++] = GenerateSineWave(60, 0.5f);
-	WaveForms[WaveFormCount++] = GenerateSineWave(120, 0.5f);
-	WaveForms[WaveFormCount++] = GenerateSineWave(240, 0.5f);
-	WaveForms[WaveFormCount++] = GenerateSineWave(512, 0.5f);
-	WaveForms[WaveFormCount++] = GenerateSineWave(1024, 0.5f);
-	WaveForms[WaveFormCount++] = GenerateSineWave(2048, 0.5f);
-	WaveForms[WaveFormCount++] = GenerateSineWave(4096, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(60, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(120, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(240, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(512, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(1024, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(2048, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(4096, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(8192, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(16384, 0.5f);
 
 	for (int i = 1; i < argc; ++i) {
 		const char *path = argv[i];
@@ -851,8 +915,9 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 		WaveForms[WaveFormCount++] = Serialize((Audio_Stream *)buff);
 	}
 
-	G.Volume    = 1;
-	G.FreqRatio = 1;
+	G.Volume     = 1;
+	G.FreqRatio  = 1;
+	G.PitchShift = 0;
 
 	ResetWaveform();
 
