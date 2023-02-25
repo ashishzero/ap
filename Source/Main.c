@@ -46,14 +46,6 @@ float WrapAngle(float radians) {
 	return Wrap(-pi, pi, radians);
 }
 
-float ComplexLengthSq(Complex c) {
-	return c.re * c.re + c.im * c.im;
-}
-
-float ComplexLength(Complex c) {
-	return sqrtf(ComplexLengthSq(c));
-}
-
 F32FrameStereo LoadFrame(PCM16FrameStereo *src, float frame, uint last) {
 	float index;
 	float alpha = modff(frame, &index);
@@ -245,8 +237,8 @@ void Process(const KrAudioSpec *spec) {
 
 	for (int index = 0; index <= FFTLength/2; ++index) {
 		float amplitudes[2], phases[2];
-		amplitudes[0] = ComplexLength(FFTBufferL[index]);
-		amplitudes[1] = ComplexLength(FFTBufferR[index]);
+		amplitudes[0] = ComplexAmplitude(FFTBufferL[index]);
+		amplitudes[1] = ComplexAmplitude(FFTBufferR[index]);
 		phases[0]     = atan2f(FFTBufferL[index].im, FFTBufferL[index].re);
 		phases[1]     = atan2f(FFTBufferR[index].im, FFTBufferR[index].re);
 

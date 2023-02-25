@@ -268,24 +268,19 @@ typedef enum LogKind {
     LogKind_Trace, LogKind_Info, LogKind_Warning, LogKind_Error
 } LogKind;
 
-typedef struct Logger {
-    void (*proc)(void *, enum LogKind, const char *, va_list);
-    void * data;
-} Logger;
+typedef struct LogAgent {
+    void (*Handle)(void *, enum LogKind, const char *, va_list);
+    void * Data;
+} LogAgent;
 
-typedef struct AssertionHandler {
-    void (*proc)(const char *, int);
-} AssertionHandler;
-
-typedef struct FatalErrorHandler {
-    void (*proc)();
-} FatalErrorHandler;
+typedef void (*AssertionHandler)(const char *, int);
+typedef void (*FatalErrorHandler)();
 
 struct ThreadContext {
-    RandomSource      random;
-    Logger            logger;
-    AssertionHandler  assertion_handler;
-    FatalErrorHandler fatal_error_handler;
+	RandomSource      Random;
+	LogAgent          Logger;
+	AssertionHandler  OnAssertion;
+    FatalErrorHandler OnFatalError;
 };
 
 extern thread_local struct ThreadContext Thread;

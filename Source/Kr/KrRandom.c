@@ -70,33 +70,33 @@ void RandomSourceSeedEx(RandomSource *rng, u64 state, u64 seq) {
 }
 
 u32 Random() {
-	return RandomEx(&Thread.random);
+	return RandomEx(&Thread.Random);
 }
 
 u32 RandomBound(u32 bound) {
-	return RandomBoundEx(&Thread.random, bound);
+	return RandomBoundEx(&Thread.Random, bound);
 }
 
 u32 RandomRange(u32 min, u32 max) {
-	return RandomRangeEx(&Thread.random, min, max);
+	return RandomRangeEx(&Thread.Random, min, max);
 }
 
 float RandomFloatUnit() {
-	return RandomFloatUnitEx(&Thread.random);
+	return RandomFloatUnitEx(&Thread.Random);
 }
 
 float RandomFloatBound(float bound) {
-	return RandomFloatBoundEx(&Thread.random, bound);
+	return RandomFloatBoundEx(&Thread.Random, bound);
 }
 
 float RandomFloatRange(float min, float max) {
-	return RandomFloatRangeEx(&Thread.random, min, max);
+	return RandomFloatRangeEx(&Thread.Random, min, max);
 }
 
 float RandomFloat() {
-	return RandomFloatEx(&Thread.random);
+	return RandomFloatEx(&Thread.Random);
 }
 
 void RandomSourceSeed(u64 state, u64 seq) {
-	RandomSourceSeedEx(&Thread.random, state, seq);
+	RandomSourceSeedEx(&Thread.Random, state, seq);
 }
