@@ -1,16 +1,16 @@
 #pragma once
-#include "KrPlatform.h"
+#include "Kr/KrBase.h"
 
 //
 // [Atomics]
 //
 
-proc i32   KrAtomicAdd(volatile i32 *dst, i32 val);
-proc i32   KrAtomicCmpExg(volatile i32 *dst, i32 exchange, i32 compare);
-proc void *KrAtomicCmpExgPtr(volatile void **dst, void *exchange, void *compare);
-proc i32   KrAtomicExg(volatile i32 *dst, i32 val);
-proc void  KrAtomicLock(volatile i32 *lock);
-proc void  KrAtomicUnlock(volatile i32 *lock);
+i32   KrAtomicAdd(volatile i32 *dst, i32 val);
+i32   KrAtomicCmpExg(volatile i32 *dst, i32 exchange, i32 compare);
+void *KrAtomicCmpExgPtr(volatile void **dst, void *exchange, void *compare);
+i32   KrAtomicExg(volatile i32 *dst, i32 val);
+void  KrAtomicLock(volatile i32 *lock);
+void  KrAtomicUnlock(volatile i32 *lock);
 
 //
 // [Audio]
@@ -42,14 +42,14 @@ typedef struct KrAudioDeviceInfo {
 	const char *    Name;
 } KrAudioDeviceInfo;
 
-proc bool KrAudio_IsPlaying();
-proc void KrAudio_Update();
-proc void KrAudio_Resume();
-proc void KrAudio_Pause();
-proc void KrAudio_Reset();
-proc bool KrAudio_SetRenderDevice(KrAudioDeviceId id);
-proc uint KrAudio_GetDeviceList(KrAudioDeviceFlow flow, bool inactive, KrAudioDeviceInfo *output, uint cap);
-proc bool KrAudio_GetEffectiveDevice(KrAudioDeviceInfo *output);
+bool KrAudio_IsPlaying();
+void KrAudio_Update();
+void KrAudio_Resume();
+void KrAudio_Pause();
+void KrAudio_Reset();
+bool KrAudio_SetRenderDevice(KrAudioDeviceId id);
+uint KrAudio_GetDeviceList(KrAudioDeviceFlow flow, bool inactive, KrAudioDeviceInfo *output, uint cap);
+bool KrAudio_GetEffectiveDevice(KrAudioDeviceInfo *output);
 
 //
 // [Window]

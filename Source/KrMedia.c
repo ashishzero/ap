@@ -1,19 +1,19 @@
 #include "KrMediaImpl.h"
 
-inproc bool KrAudioIsPlayingFallback() { return false; }
-inproc void KrAudioUpdateFallback() {}
-inproc void KrAudioResumeFallback() {}
-inproc void KrAudioPauseFallback() {}
-inproc void KrAudioResetFallback() {}
-inproc bool KrAudioSetRenderDeviceFallback(KrAudioDeviceId id) { return false; }
-inproc uint KrAudioGetDeviceListFallback(KrAudioDeviceFlow flow, bool inactive, KrAudioDeviceInfo *output, uint cap) { return 0; }
-inproc bool KrAudioGetEffectiveDevice(KrAudioDeviceInfo *output) { return true; }
-inproc bool KrWindowIsFullscreenFallback() { return false; }
-inproc void KrWindowToggleFullscreenFallback() {}
+static bool KrAudioIsPlayingFallback() { return false; }
+static void KrAudioUpdateFallback() {}
+static void KrAudioResumeFallback() {}
+static void KrAudioPauseFallback() {}
+static void KrAudioResetFallback() {}
+static bool KrAudioSetRenderDeviceFallback(KrAudioDeviceId id) { return false; }
+static uint KrAudioGetDeviceListFallback(KrAudioDeviceFlow flow, bool inactive, KrAudioDeviceInfo *output, uint cap) { return 0; }
+static bool KrAudioGetEffectiveDevice(KrAudioDeviceInfo *output) { return true; }
+static bool KrWindowIsFullscreenFallback() { return false; }
+static void KrWindowToggleFullscreenFallback() {}
 
-inproc void KrEventFallback(const KrEvent *event, void *user) {}
-inproc void KrUpdateFallback(float w, float h, void *user) {}
-inproc u32  KrUploadAudioFallback(const KrAudioSpec *spec, u8 *data, u32 count, void *user) { return 0; }
+static void KrEventFallback(const KrEvent *event, void *user) {}
+static void KrUpdateFallback(float w, float h, void *user) {}
+static u32  KrUploadAudioFallback(const KrAudioSpec *spec, u8 *data, u32 count, void *user) { return 0; }
 
 const KrLibrary LibraryFallback = {
 	.Audio = {
@@ -56,43 +56,43 @@ KrUserContext g_UserContext = {
 	.OnUploadAudio = KrUploadAudioFallback,
 };
 
-proc bool KrWindow_IsFullscreen() {
+bool KrWindow_IsFullscreen() {
 	return g_Library.Window.IsFullscreen();
 }
 
-proc void KrWindow_ToggleFullscreen() {
+void KrWindow_ToggleFullscreen() {
 	g_Library.Window.ToggleFullscreen();
 }
 
-proc bool KrAudio_IsPlaying() {
+bool KrAudio_IsPlaying() {
 	return g_Library.Audio.IsPlaying();
 }
 
-proc void KrAudio_Update() {
+void KrAudio_Update() {
 	g_Library.Audio.Update();
 }
 
-proc void KrAudio_Resume() {
+void KrAudio_Resume() {
 	g_Library.Audio.Resume();
 }
 
-proc void KrAudio_Pause() {
+void KrAudio_Pause() {
 	g_Library.Audio.Pause();
 }
 
-proc void KrAudio_Reset() {
+void KrAudio_Reset() {
 	g_Library.Audio.Reset();
 }
 
-proc bool KrAudio_SetRenderDevice(KrAudioDeviceId id) {
+bool KrAudio_SetRenderDevice(KrAudioDeviceId id) {
 	return g_Library.Audio.SetRenderDevice(id);
 }
 
-proc uint KrAudio_GetDeviceList(KrAudioDeviceFlow flow, bool inactive, KrAudioDeviceInfo *output, uint cap) {
+uint KrAudio_GetDeviceList(KrAudioDeviceFlow flow, bool inactive, KrAudioDeviceInfo *output, uint cap) {
 	return g_Library.Audio.GetDeviceList(flow, inactive, output, cap);
 }
 
-proc bool KrAudio_GetEffectiveDevice(KrAudioDeviceInfo *output) {
+bool KrAudio_GetEffectiveDevice(KrAudioDeviceInfo *output) {
 	return g_Library.Audio.GetEffectiveDevice(output);
 }
 

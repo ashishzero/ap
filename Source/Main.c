@@ -1,14 +1,10 @@
 #include "KrMedia.h"
-#include "FFT.h"
+#include "Kr/KrMath.h"
 
 #include <stdio.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
-
-float Lerp(float a, float b, float t) {
-	return (1.0f - t) * a + t * b;
-}
 
 #define MAX_RENDER_FRAMES  512
 #define MAX_PROCESS_FRAMES 512
@@ -45,16 +41,9 @@ typedef struct F32FrameStereo {
 	float Right;
 } F32FrameStereo;
 
-float Wrap(float min, float a, float max) {
-	float range  = max - min;
-	float offset = a - min;
-	float result = (offset - (floorf(offset / range) * range) + min);
-	return result;
-}
-
 float WrapAngle(float radians) {
-	const float pi = (float)MATH_PI;
-	return Wrap(-pi, radians, pi);
+	const float pi = (float)PI;
+	return Wrap(-pi, pi, radians);
 }
 
 float ComplexLengthSq(Complex c) {
@@ -63,10 +52,6 @@ float ComplexLengthSq(Complex c) {
 
 float ComplexLength(Complex c) {
 	return sqrtf(ComplexLengthSq(c));
-}
-
-float MapRange(float in_a, float in_b, float out_a, float out_b, float v) {
-	return (out_b - out_a) / (in_b - in_a) * (v - in_a) + out_a;
 }
 
 F32FrameStereo LoadFrame(PCM16FrameStereo *src, float frame, uint last) {
@@ -183,7 +168,7 @@ static bool ApplyTransformation = false;
 
 void InitWindow() {
 	for (int i = 0; i < WindowLength; ++i) {
-		HanWindow[i] = 0.5f * (1.0f - cosf(2 * (float)MATH_PI * (float)i / (float)(WindowLength - 1)));
+		HanWindow[i] = 0.5f * (1.0f - cosf(2 * (float)PI * (float)i / (float)(WindowLength - 1)));
 	}
 }
 
@@ -193,10 +178,10 @@ void Transform(Complex *buf, uint length) {
 
 	for (uint i = 0; i < length; ++i) {
 		float a     = sqrtf(buf[i].re * buf[i].re + buf[i].im * buf[i].im);
-		float pi    = (float)MATH_PI;
+		float pi    = (float)PI;
 
 		// whisper
-		//float phase = 2.0f * (float)MATH_PI * (float)rand() / (float)RAND_MAX;
+		//float phase = 2.0f * (float)PI * (float)rand() / (float)RAND_MAX;
 		//buf[i].re   = a * cosf(phase);
 		//buf[i].im   = a * sinf(phase);
 
@@ -225,7 +210,7 @@ void Process(const KrAudioSpec *spec) {
 		G.Pos += (freq_ratio * G.Frequency / (float)spec->Frequency);
 
 		// repeat for now
-		G.Pos = Wrap(0.0f, G.Pos, (float)G.Last);
+		G.Pos = Wrap(0.0f, (float)G.Last, G.Pos);
 
 		// TODO: correct transition
 		//if (G.Pos <= 0.0f) {
@@ -250,11 +235,13 @@ void Process(const KrAudioSpec *spec) {
 		FFTBufferR[index].im = 0.0f;
 	}
 
-	InplaceFFT(FFTBufferL, FFTLength);
-	InplaceFFT(FFTBufferR, FFTLength);
+	FFT(FFTBufferL, FFTLength);
+	FFT(FFTBufferR, FFTLength);
 
+#if 1
 	Transform(FFTBufferL, FFTLength);
 	Transform(FFTBufferR, FFTLength);
+#endif
 
 	for (int index = 0; index <= FFTLength/2; ++index) {
 		float amplitudes[2], phases[2];
@@ -263,7 +250,7 @@ void Process(const KrAudioSpec *spec) {
 		phases[0]     = atan2f(FFTBufferL[index].im, FFTBufferL[index].re);
 		phases[1]     = atan2f(FFTBufferR[index].im, FFTBufferR[index].re);
 
-		float center_bin_freq = 2.0f * (float)MATH_PI * (float)index / (float)FFTLength;
+		float center_bin_freq = 2.0f * (float)PI * (float)index / (float)FFTLength;
 		float phase_diff_l = phases[0] - LastInputPhasesL[index];
 		float phase_diff_r = phases[1] - LastInputPhasesR[index];
 
@@ -274,7 +261,7 @@ void Process(const KrAudioSpec *spec) {
 		float deviation_r      = phase_diff_r / (float)HopLength;
 
 
-		float freq = 2.0f * (float)MATH_PI * (float)index / (float)FFTLength;
+		float freq = 2.0f * (float)PI * (float)index / (float)FFTLength;
 
 		AnalysisFrequenciesL[index] = freq + deviation_l;
 		AnalysisFrequenciesR[index] = freq + deviation_r;
@@ -302,8 +289,8 @@ void Process(const KrAudioSpec *spec) {
 			}
 		}
 
-		float freq_l = freqs[0] * spec->Frequency / (2.0f * (float)MATH_PI);
-		float freq_r = freqs[1] * spec->Frequency / (2.0f * (float)MATH_PI);
+		float freq_l = freqs[0] * spec->Frequency / (2.0f * (float)PI);
+		float freq_r = freqs[1] * spec->Frequency / (2.0f * (float)PI);
 
 		//printf("Freq Left: %f, Freq Right: %f\n", freq_l, freq_r);
 	}
@@ -321,13 +308,13 @@ void Process(const KrAudioSpec *spec) {
 		if (ApplyTransformation) {
 			// robotize
 			float robot_base_freq = 120.0f;
-			float harmonic_l = floorf(AnalysisFrequenciesL[i] * spec->Frequency / (2.0f * (float)MATH_PI) / robot_base_freq + 0.5f);
-			float harmonic_r = floorf(AnalysisFrequenciesR[i] * spec->Frequency / (2.0f * (float)MATH_PI) / robot_base_freq + 0.5f);
+			float harmonic_l = floorf(AnalysisFrequenciesL[i] * spec->Frequency / (2.0f * (float)PI) / robot_base_freq + 0.5f);
+			float harmonic_r = floorf(AnalysisFrequenciesR[i] * spec->Frequency / (2.0f * (float)PI) / robot_base_freq + 0.5f);
 
 			if (harmonic_l > 0) {
-				float harmonic_freq = robot_base_freq * (2.0f * (float)MATH_PI / spec->Frequency) * harmonic_l;
+				float harmonic_freq = robot_base_freq * (2.0f * (float)PI / spec->Frequency) * harmonic_l;
 
-				int bin = (int)floorf(harmonic_freq * (float)FFTLength / (2.0f * (float)MATH_PI) + 0.5f);
+				int bin = (int)floorf(harmonic_freq * (float)FFTLength / (2.0f * (float)PI) + 0.5f);
 
 				if (bin <= FFTLength/2) {
 					SynthesisMagnitudesL[bin] += AnalysisMagnitudesL[i];
@@ -336,9 +323,9 @@ void Process(const KrAudioSpec *spec) {
 			}
 
 			if (harmonic_r > 0) {
-				float harmonic_freq = robot_base_freq * (2.0f * (float)MATH_PI / spec->Frequency) * harmonic_r;
+				float harmonic_freq = robot_base_freq * (2.0f * (float)PI / spec->Frequency) * harmonic_r;
 
-				int bin = (int)floorf(harmonic_freq * (float)FFTLength / (2.0f * (float)MATH_PI) + 0.5f);
+				int bin = (int)floorf(harmonic_freq * (float)FFTLength / (2.0f * (float)PI) + 0.5f);
 
 				if (bin <= FFTLength/2) {
 					SynthesisMagnitudesR[bin] += AnalysisMagnitudesR[i];
@@ -370,7 +357,7 @@ void Process(const KrAudioSpec *spec) {
 		amplitudes[0] = SynthesisMagnitudesL[index];
 		amplitudes[1] = SynthesisMagnitudesR[index];
 
-		float freq = 2.0f * (float)MATH_PI * (float)index / (float)FFTLength; 
+		float freq = 2.0f * (float)PI * (float)index / (float)FFTLength; 
 
 		float deviation_l = SynthesisFrequenciesL[index] - freq;
 		float deviation_r = SynthesisFrequenciesR[index] - freq;
@@ -378,7 +365,7 @@ void Process(const KrAudioSpec *spec) {
 		float phase_diff_l = deviation_l * (float)HopLength;
 		float phase_diff_r = deviation_r * (float)HopLength;
 
-		float center_bin_freq = 2.0f * (float)MATH_PI * (float)index / (float)FFTLength;
+		float center_bin_freq = 2.0f * (float)PI * (float)index / (float)FFTLength;
 		phase_diff_l += center_bin_freq * (float)HopLength;
 		phase_diff_r += center_bin_freq * (float)HopLength;
 
@@ -400,8 +387,8 @@ void Process(const KrAudioSpec *spec) {
 	}
 #endif
 
-	InplaceInvFFT(FFTBufferL, FFTLength);
-	InplaceInvFFT(FFTBufferR, FFTLength);
+	IFFT(FFTBufferL, FFTLength);
+	IFFT(FFTBufferR, FFTLength);
 
 	memcpy(OutputFrames, OutputFrames + HopLength, (OutputFrameLength - HopLength) * sizeof(F32FrameStereo));
 	memset(OutputFrames + OutputFrameLength - HopLength, 0, HopLength * sizeof(F32FrameStereo));
@@ -461,7 +448,7 @@ u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *buf, u32 count, void *user) {
 		G.RenderBufTarget[next_buf_index].FreqDomain[i].re = G.RenderBufTarget[next_buf_index].TimeDomain[i];
 	}
 
-	InplaceFFT(G.RenderBufTarget[next_buf_index].FreqDomain, MAX_RENDER_FRAMES);
+	FFT(G.RenderBufTarget[next_buf_index].FreqDomain, MAX_RENDER_FRAMES);
 
 	G.RenderBufIndex = next_buf_index;
 #endif
@@ -693,9 +680,9 @@ Quad LerpQuad(Quad a, Quad b, float t) {
 }
 
 // TODO: cleanup this mess
-proc void PL_DrawQuad(float p0[2], float p1[2], float p2[2], float p3[2], float color0[4], float color1[4], float color2[4], float color3[4]);
-proc void PL_DrawRect(float x, float y, float w, float h, float color0[4], float color1[4]);
-proc void PL_DrawRectVert(float x, float y, float w, float h, float color0[4], float color1[4]);
+void PL_DrawQuad(float p0[2], float p1[2], float p2[2], float p3[2], float color0[4], float color1[4], float color2[4], float color3[4]);
+void PL_DrawRect(float x, float y, float w, float h, float color0[4], float color1[4]);
+void PL_DrawRectVert(float x, float y, float w, float h, float color0[4], float color1[4]);
 
 void Update(float window_w, float window_h, void *data) {
 	const float PaddingX = 50.0f;
@@ -940,7 +927,7 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 	//WaveForms[WaveFormCount++] = GenerateSineWave(25, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(30, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(45, 0.5f);
-	//WaveForms[WaveFormCount++] = GenerateSineWave(60, 0.5f);
+	WaveForms[WaveFormCount++] = GenerateSineWave(60, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(120, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(240, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(512, 0.5f);
