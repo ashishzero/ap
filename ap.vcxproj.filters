@@ -47,9 +47,6 @@
     <ClInclude Include="Resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\TwiddleFactorFFT.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Source\Kr\KrBase.h">
       <Filter>Header Files</Filter>
     </ClInclude>

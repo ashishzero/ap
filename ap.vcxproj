@@ -99,7 +99,6 @@
     <ClInclude Include="Source\Kr\KrRandom.h" />
     <ClInclude Include="Source\KrMedia.h" />
     <ClInclude Include="Source\KrMediaImpl.h" />
-    <ClInclude Include="Source\TwiddleFactorFFT.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="KrResource.rc" />
