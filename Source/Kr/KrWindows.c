@@ -1700,7 +1700,7 @@ static void PL_Media_Audio_Release(void) {
 		if (Context.Audio.DeviceEnumerator)
 			Context.Audio.DeviceEnumerator->lpVtbl->Release(Context.Audio.DeviceEnumerator);
 
-		while (Context.Audio.FirstDevice.Next != &Context.Audio.FirstDevice) {
+		while (Context.Audio.FirstDevice.Next) {
 			PL_AudioDeviceNative *native   = Context.Audio.FirstDevice.Next;
 			Context.Audio.FirstDevice.Next = native->Next;
 			CoTaskMemFree((void *)native->Id);
