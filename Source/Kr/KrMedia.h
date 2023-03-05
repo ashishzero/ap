@@ -127,12 +127,14 @@ typedef struct PL_AudioSpec {
 typedef void (*PL_EventProc)(PL_Event const *, void *);
 typedef void (*PL_UpdateProc)(struct PL_IoDevice const *, void *);
 typedef u32  (*PL_AudioRenderProc)(PL_AudioSpec const *, u8 *, u32, void *);
+typedef u32  (*PL_AudioCaptureProc)(PL_AudioSpec const *, u8 *, u32, void *);
 
 typedef struct PL_UserVTable {
-	void *             Data;
-	PL_EventProc       OnEvent;
-	PL_UpdateProc      OnUpdate;
-	PL_AudioRenderProc OnAudioRender;
+	void *              Data;
+	PL_EventProc        OnEvent;
+	PL_UpdateProc       OnUpdate;
+	PL_AudioRenderProc  OnAudioRender;
+	PL_AudioCaptureProc OnAudioCapture;
 } PL_UserVTable;
 
 typedef enum PL_FeatureBit {
@@ -232,4 +234,8 @@ void            PL_UpdateAudioRender(void);
 void            PL_PauseAudioRender(void);
 void            PL_ResumeAudioRender(void);
 void            PL_ResetAudioRender(void);
+bool            PL_IsAudioCapturing(void);
+void            PL_PauseAudioCapture(void);
+void            PL_ResumeAudioCapture(void);
+void            PL_ResetAudioCapture(void);
 void            PL_SetAudioDevice(PL_AudioDevice const *device);

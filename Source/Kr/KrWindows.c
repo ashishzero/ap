@@ -215,14 +215,18 @@ typedef struct PL_AudioDeviceBuffer {
 } PL_AudioDeviceBuffer;
 
 typedef struct PL_ContextVTable {
-	bool (*IsFullscreen)      (void);
-	void (*ToggleFullscreen)  (void);
-	bool (*IsAudioRendering)  (void);
-	void (*UpdateAudioRender) (void);
-	void (*PauseAudioRender)  (void);
-	void (*ResumeAudioRender) (void);
-	void (*ResetAudioRender)  (void);
-	void (*SetAudioDevice)    (PL_AudioDevice const *);
+	bool (*IsFullscreen)       (void);
+	void (*ToggleFullscreen)   (void);
+	bool (*IsAudioRendering)   (void);
+	void (*UpdateAudioRender)  (void);
+	void (*PauseAudioRender)   (void);
+	void (*ResumeAudioRender)  (void);
+	void (*ResetAudioRender)   (void);
+	bool (*IsAudioCapturing)   (void);
+	void (*PauseAudioCapture)  (void);
+	void (*ResumeAudioCapture) (void);
+	void (*ResetAudioCapture)  (void);
+	void (*SetAudioDevice)     (PL_AudioDevice const *);
 } PL_ContextVTable;
 
 typedef struct PL_Context {
@@ -248,11 +252,16 @@ static void PL_Media_Fallback_UpdateAudioRender(void)                      {}
 static void PL_Media_Fallback_PauseAudioRender(void)                       {}
 static void PL_Media_Fallback_ResumeAudioRender(void)                      {}
 static void PL_Media_Fallback_ResetAudioRender(void)                       {}
+static bool PL_Media_Fallback_IsAudioCapturing(void)                       { return false; }
+static void PL_Media_Fallback_PauseAudioCapture(void)                      {}
+static void PL_Media_Fallback_ResumeAudioCapture(void)                     {}
+static void PL_Media_Fallback_ResetAudioCapture(void)                      {}
 static void PL_Media_Fallback_SetAudioDevice(PL_AudioDevice const *device) {}
 
 static void PL_User_Fallback_OnEvent(PL_Event const *event, void *data)                               {}
 static void PL_User_Fallback_OnUpdate(PL_IoDevice const *io, void *data)                              {}
 static u32  PL_User_Fallback_OnAudioRender(PL_AudioSpec const *spec, u8 *out, u32 frames, void *data) { return 0; }
+static u32  PL_User_Fallback_OnAudioCapture(PL_AudioSpec const *spec, u8 *in, u32 frames, void *data) { return frames; }
 
 static PL_Context Context = {
 	.VTable = {
@@ -268,7 +277,8 @@ static PL_Context Context = {
 	.UserVTable = {
 		.OnEvent              = PL_User_Fallback_OnEvent,
 		.OnUpdate             = PL_User_Fallback_OnUpdate,
-		.OnAudioRender        = PL_User_Fallback_OnAudioRender
+		.OnAudioRender        = PL_User_Fallback_OnAudioRender,
+		.OnAudioCapture       = PL_User_Fallback_OnAudioCapture,
 	}
 };
 
@@ -319,6 +329,22 @@ void PL_ResetAudioRender(void) {
 
 void PL_SetAudioDevice(PL_AudioDevice const *device) {
 	Context.VTable.SetAudioDevice(device);
+}
+
+bool PL_IsAudioCapturing(void) {
+	return Context.VTable.IsAudioCapturing();
+}
+
+void PL_PauseAudioCapture(void) {
+	Context.VTable.PauseAudioCapture();
+}
+
+void PL_ResumeAudioCapture(void) {
+	Context.VTable.ResumeAudioCapture();
+}
+
+void PL_ResetAudioCapture(void) {
+	Context.VTable.ResetAudioCapture();
 }
 
 //
@@ -916,6 +942,7 @@ DEFINE_GUID(PL_IID_IMMNotificationClient,0x7991eec9,0x7e89,0x4d85,0x83,0x90,0x6c
 DEFINE_GUID(PL_IID_IMMEndpoint,0x1BE09788,0x6894,0x4089,0x85,0x86,0x9A,0x2A,0x6C,0x26,0x5A,0xC5);
 DEFINE_GUID(PL_IID_IAudioClient,0x1cb9ad4c,0xdbfa,0x4c32,0xb1,0x78,0xc2,0xf5,0x68,0xa7,0x03,0xb2);
 DEFINE_GUID(PL_IID_IAudioRenderClient,0xf294acfc,0x3146,0x4483,0xa7,0xbf,0xad,0xdc,0xa7,0xc2,0x60,0xe2);
+DEFINE_GUID(PL_IID_IAudioCaptureClient,0xc8adbd64,0xe71e,0x48a0,0xa4,0xde,0x18,0x5c,0x39,0x5c,0xd3,0x17);
 DEFINE_GUID(PL_KSDATAFORMAT_SUBTYPE_PCM,0x00000001,0x0000,0x0010,0x80,0x00,0x00,0xaa,0x00,0x38,0x9b,0x71);
 DEFINE_GUID(PL_KSDATAFORMAT_SUBTYPE_IEEE_FLOAT,0x00000003,0x0000,0x0010,0x80,0x00,0x00,0xaa,0x00,0x38,0x9b,0x71);
 DEFINE_GUID(PL_KSDATAFORMAT_SUBTYPE_WAVEFORMATEX,0x00000000L,0x0000,0x0010,0x80,0x00,0x00,0xaa,0x00,0x38,0x9b,0x71);
@@ -1050,19 +1077,21 @@ HRESULT STDMETHODCALLTYPE PL_OnDeviceStateChanged(IMMNotificationClient *this_, 
 
 	PL_AtomicUnlock(&Context.Audio.Lock);
 
-	for (int i = 0; i < PL_AudioEndpoint_EnumCount; ++i) {
-		PL_AudioDeviceNative *desired   = PL_AtomicCmpExgPtr(&Context.Audio.Endpoints[i].DesiredDevice, 0, 0);
-		PL_AudioDeviceNative *effective = PL_AtomicCmpExgPtr(&Context.Audio.Endpoints[i].EffectiveDevice, 0, 0);
-		if (desired == nullptr) continue; // Handled by Default's notification
-		if (native->IsActive) {
-			if (native == desired) {
-				ReleaseSemaphore(Context.Audio.Endpoints[i].Commands[PL_AudioCommand_LoadDesired], 1, 0);
-			} else if (!effective) {
-				ReleaseSemaphore(Context.Audio.Endpoints[i].Commands[PL_AudioCommand_LoadDefault], 1, 0);
-			}
-		} else if (native == effective) {
-			ReleaseSemaphore(Context.Audio.Endpoints[i].Commands[PL_AudioCommand_LoadDefault], 1, 0);
+	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[native->IsCapture == 0 ?
+		PL_AudioEndpoint_Render : PL_AudioEndpoint_Capture];
+
+	PL_AudioDeviceNative *desired   = PL_AtomicCmpExgPtr(&endpoint->DesiredDevice, 0, 0);
+	PL_AudioDeviceNative *effective = PL_AtomicCmpExgPtr(&endpoint->EffectiveDevice, 0, 0);
+	if (desired == nullptr) return S_OK; // Handled by Default's notification
+
+	if (native->IsActive) {
+		if (native == desired) {
+			ReleaseSemaphore(endpoint->Commands[PL_AudioCommand_LoadDesired], 1, 0);
+		} else if (!effective) {
+			ReleaseSemaphore(endpoint->Commands[PL_AudioCommand_LoadDefault], 1, 0);
 		}
+	} else if (native == effective) {
+		ReleaseSemaphore(endpoint->Commands[PL_AudioCommand_LoadDefault], 1, 0);
 	}
 
 	return S_OK;
@@ -1075,26 +1104,18 @@ HRESULT STDMETHODCALLTYPE PL_OnDeviceRemoved(IMMNotificationClient *this_, LPCWS
 HRESULT STDMETHODCALLTYPE PL_OnDefaultDeviceChanged(IMMNotificationClient *this_, EDataFlow flow, ERole role, LPCWSTR device_id) {
 	if (role != eMultimedia) return S_OK;
 
-	if (flow == eRender) {
-		if (!device_id) {
-			// No rendering device
-			PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_LOST, PL_AudioEndpoint_Render, 0);
-			return S_OK;
-		}
-		PL_AudioDevice *desired = PL_AtomicCmpExgPtr(&Context.Audio.Endpoints[PL_AudioEndpoint_Render].DesiredDevice, nullptr, nullptr);
-		if (desired == nullptr) {
-			ReleaseSemaphore(Context.Audio.Endpoints[PL_AudioEndpoint_Render].Commands[PL_AudioCommand_LoadDefault], 1, 0);
-		}
-	} else if (flow == eCapture) {
-		if (!device_id) {
-			// No capturing device
-			PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_LOST, PL_AudioEndpoint_Capture, 0);
-			return S_OK;
-		}
-		PL_AudioDevice *desired = PL_AtomicCmpExgPtr(&Context.Audio.Endpoints[PL_AudioEndpoint_Capture].DesiredDevice, nullptr, nullptr);
-		if (desired == nullptr) {
-			ReleaseSemaphore(Context.Audio.Endpoints[PL_AudioEndpoint_Capture].Commands[PL_AudioCommand_LoadDefault], 1, 0);
-		}
+	PL_AudioEndpointKind kind = flow == eRender ? PL_AudioEndpoint_Render : PL_AudioEndpoint_Capture;
+	PL_AudioEndpoint *   endpoint = &Context.Audio.Endpoints[kind];
+
+	if (!device_id) {
+		// No device for the endpoint
+		PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_LOST, kind, 0);
+		return S_OK;
+	}
+
+	PL_AudioDevice *desired = PL_AtomicCmpExgPtr(&endpoint->DesiredDevice, nullptr, nullptr);
+	if (desired == nullptr) {
+		ReleaseSemaphore(endpoint->Commands[PL_AudioCommand_LoadDefault], 1, 0);
 	}
 
 	return S_OK;
@@ -1213,7 +1234,7 @@ static void PL_AudioEndpoint_Release(PL_AudioEndpoint *endpoint) {
 	}
 }
 
-static void PL_AudioEndpoint_LoadFrames(void) {
+static void PL_AudioEndpoint_RenderFrames(void) {
 	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[PL_AudioEndpoint_Render];
 
 	if (endpoint->DeviceLost)
@@ -1243,8 +1264,31 @@ static void PL_AudioEndpoint_LoadFrames(void) {
 	}
 }
 
-static void PL_AudioEndpoint_ReleaseRenderDevice(void) {
-	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[PL_AudioEndpoint_Render];
+static void PL_AudioEndpoint_CaptureFrames(void) {
+	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[PL_AudioEndpoint_Capture];
+
+	if (endpoint->DeviceLost)
+		return;
+
+	BYTE *data     = nullptr;
+	UINT32 frames  = 0;
+	DWORD flags    = 0;
+
+	HRESULT hr = endpoint->Capture->lpVtbl->GetBuffer(endpoint->Capture, &data, &frames, &flags, nullptr, nullptr);
+	if (SUCCEEDED(hr)) {
+		if (flags & AUDCLNT_BUFFERFLAGS_SILENT)
+			data = nullptr; // Silence
+		u32 read = Context.UserVTable.OnAudioCapture(&endpoint->Spec, data, frames, Context.UserVTable.Data);
+		hr = endpoint->Capture->lpVtbl->ReleaseBuffer(endpoint->Capture, read);
+	}
+
+	if (FAILED(hr)) {
+		InterlockedExchange(&endpoint->DeviceLost, 1);
+	}
+}
+
+static void PL_AudioEndpoint_ReleaseDevice(PL_AudioEndpointKind kind) {
+	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[kind];
 	if (endpoint->Render) {
 		endpoint->Render->lpVtbl->Release(endpoint->Render);
 		endpoint->Render = nullptr;
@@ -1294,15 +1338,16 @@ static bool PL_AudioEndpoint_SetAudioSpec(PL_AudioEndpoint *endpoint, WAVEFORMAT
 	return true;
 }
 
-static bool PL_AudioEndpoint_TryLoadRenderDevice(PL_AudioDeviceNative *native) {
-	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[PL_AudioEndpoint_Render];
+static bool PL_AudioEndpoint_TryLoadDevice(PL_AudioEndpointKind kind, PL_AudioDeviceNative *native) {
+	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[kind];
 	IMMDevice *immdevice       = nullptr;
 	WAVEFORMATEX *wave_format  = nullptr;
 
 	HRESULT hr;
 
 	if (!native) {
-		hr = Context.Audio.DeviceEnumerator->lpVtbl->GetDefaultAudioEndpoint(Context.Audio.DeviceEnumerator, eRender, eMultimedia, &immdevice);
+		EDataFlow flow = kind == PL_AudioEndpoint_Render ? eRender : eCapture;
+		hr = Context.Audio.DeviceEnumerator->lpVtbl->GetDefaultAudioEndpoint(Context.Audio.DeviceEnumerator, flow, eMultimedia, &immdevice);
 		if (FAILED(hr)) return false;
 
 		LPCWSTR id = nullptr;
@@ -1345,7 +1390,11 @@ static bool PL_AudioEndpoint_TryLoadRenderDevice(PL_AudioDeviceNative *native) {
 	hr = endpoint->Client->lpVtbl->GetBufferSize(endpoint->Client, &endpoint->MaxFrames);
 	if (FAILED(hr)) goto failed;
 
-	hr = endpoint->Client->lpVtbl->GetService(endpoint->Client, &PL_IID_IAudioRenderClient, &endpoint->Render);
+	if (kind == PL_AudioEndpoint_Render) {
+		hr = endpoint->Client->lpVtbl->GetService(endpoint->Client, &PL_IID_IAudioRenderClient, &endpoint->Render);
+	} else {
+		hr = endpoint->Client->lpVtbl->GetService(endpoint->Client, &PL_IID_IAudioCaptureClient, &endpoint->Capture);
+	}
 	if (FAILED(hr)) goto failed;
 
 	CoTaskMemFree(wave_format);
@@ -1355,17 +1404,21 @@ static bool PL_AudioEndpoint_TryLoadRenderDevice(PL_AudioDeviceNative *native) {
 	InterlockedExchangePointer(&endpoint->EffectiveDevice, native);
 	InterlockedExchange(&endpoint->DeviceLost, 0);
 
-	PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_CHANGED, (WPARAM)Context.Audio.Endpoints[PL_AudioEndpoint_Render].EffectiveDevice, 0);
+	PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_CHANGED, (WPARAM)endpoint->EffectiveDevice, 0);
 
-	PL_AudioEndpoint_LoadFrames();
+	if (kind == PL_AudioEndpoint_Render) {
+		PL_AudioEndpoint_RenderFrames();
+	} else {
+		PL_AudioEndpoint_CaptureFrames();
+	}
 
-	if (Context.Audio.Endpoints[PL_AudioEndpoint_Render].Resumed) {
-		IAudioClient *client = Context.Audio.Endpoints[PL_AudioEndpoint_Render].Client;
+	if (endpoint->Resumed) {
+		IAudioClient *client = endpoint->Client;
 		HRESULT hr = client->lpVtbl->Start(client);
 		if (SUCCEEDED(hr) || hr == AUDCLNT_E_NOT_STOPPED) {
-			PostMessageW(Context.Window.Handle, PL_WM_AUDIO_RESUMED, PL_AudioEndpoint_Render, 0);
+			PostMessageW(Context.Window.Handle, PL_WM_AUDIO_RESUMED, kind, 0);
 		} else {
-			InterlockedExchange(&Context.Audio.Endpoints[PL_AudioEndpoint_Render].DeviceLost, 1);
+			InterlockedExchange(&endpoint->DeviceLost, 1);
 			goto failed;
 		}
 	}
@@ -1382,33 +1435,35 @@ failed:
 	return false;
 }
 
-static void PL_AudioEndpoint_RestartRenderDevice(PL_AudioDeviceNative *native) {
-	PL_AudioEndpoint_ReleaseRenderDevice();
-	if (!PL_AudioEndpoint_TryLoadRenderDevice(native)) {
-		PL_AudioEndpoint_ReleaseRenderDevice();
+static void PL_AudioEndpoint_RestartDevice(PL_AudioEndpointKind kind, PL_AudioDeviceNative *native) {
+	PL_AudioEndpoint_ReleaseDevice(kind);
+	if (!PL_AudioEndpoint_TryLoadDevice(kind, native)) {
+		PL_AudioEndpoint_ReleaseDevice(kind);
 		if (native) {
-			if (!PL_AudioEndpoint_TryLoadRenderDevice(nullptr)) {
-				PL_AudioEndpoint_ReleaseRenderDevice();
-				PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_LOST, PL_AudioEndpoint_Render, 0);
+			if (!PL_AudioEndpoint_TryLoadDevice(kind, nullptr)) {
+				PL_AudioEndpoint_ReleaseDevice(kind);
+				PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_LOST, kind, 0);
 			}
 		} else {
-			PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_LOST, PL_AudioEndpoint_Render, 0);
+			PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_LOST, kind, 0);
 		}
 	}
 }
 
-static DWORD WINAPI PL_AudioRenderThread(LPVOID param) {
+static DWORD WINAPI PL_AudioThread(LPVOID param) {
+	PL_AudioEndpointKind kind = (PL_AudioEndpointKind)param;
+
 	HANDLE thread = GetCurrentThread();
-	SetThreadDescription(thread, L"PL Audio Thread");
+	SetThreadDescription(thread, kind == PL_AudioEndpoint_Render ? L"PL Audio Render Thread" : L"PL Audio Capture Thread");
 
 	PL_InitThreadContext();
 
 	DWORD task_index;
 	HANDLE avrt = AvSetMmThreadCharacteristicsW(L"Pro Audio", &task_index);
 
-	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[PL_AudioEndpoint_Render];
+	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[kind];
 
-	PL_AudioEndpoint_RestartRenderDevice(endpoint->DesiredDevice);
+	PL_AudioEndpoint_RestartDevice(kind, endpoint->DesiredDevice);
 
 	HRESULT hr;
 
@@ -1416,7 +1471,10 @@ static DWORD WINAPI PL_AudioRenderThread(LPVOID param) {
 		DWORD wait = WaitForMultipleObjects(PL_AudioCommand_EnumCount, endpoint->Commands, FALSE, INFINITE);
 
 		if (wait == WAIT_OBJECT_0 + PL_AudioCommand_Update) {
-			PL_AudioEndpoint_LoadFrames();
+			if (kind == PL_AudioEndpoint_Render)
+				PL_AudioEndpoint_RenderFrames();
+			else
+				PL_AudioEndpoint_CaptureFrames();
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioCommand_Resume) {
 			InterlockedExchange(&endpoint->Resumed, 1);
 			if (!endpoint->DeviceLost) {
@@ -1449,17 +1507,17 @@ static DWORD WINAPI PL_AudioRenderThread(LPVOID param) {
 				}
 			}
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioCommand_LoadDefault) {
-			PL_AudioEndpoint_RestartRenderDevice(nullptr);
+			PL_AudioEndpoint_RestartDevice(kind, nullptr);
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioCommand_LoadDesired) {
 			PL_AudioDeviceNative *desired   = InterlockedCompareExchangePointer(&endpoint->DesiredDevice, nullptr, nullptr);
 			PL_AudioDeviceNative *effective = InterlockedCompareExchangePointer(&endpoint->EffectiveDevice, nullptr, nullptr);
 
 			if (desired) {
 				if (effective != desired || effective->Age > endpoint->Age) {
-					PL_AudioEndpoint_RestartRenderDevice(desired);
+					PL_AudioEndpoint_RestartDevice(kind, desired);
 				}
 			} else {
-				PL_AudioEndpoint_RestartRenderDevice(nullptr);
+				PL_AudioEndpoint_RestartDevice(kind, nullptr);
 			}
 		} else if (wait == WAIT_OBJECT_0 + PL_AudioCommand_Terminate) {
 			break;
@@ -1495,6 +1553,24 @@ static void PL_Media_Audio_ResetAudioRender(void) {
 	ReleaseSemaphore(Context.Audio.Endpoints[PL_AudioEndpoint_Render].Commands[PL_AudioCommand_Reset], 1, 0);
 }
 
+static bool PL_Media_Audio_IsAudioCapturing(void) {
+	if (InterlockedOr(&Context.Audio.Endpoints[PL_AudioEndpoint_Capture].DeviceLost, 0))
+		return false;
+	return InterlockedOr(&Context.Audio.Endpoints[PL_AudioEndpoint_Capture].Resumed, 0);
+}
+
+static void PL_Media_Audio_PauseAudioCapture(void) {
+	ReleaseSemaphore(Context.Audio.Endpoints[PL_AudioEndpoint_Capture].Commands[PL_AudioCommand_Pause], 1, 0);
+}
+
+static void PL_Media_Audio_ResumeAudioCapture(void) {
+	ReleaseSemaphore(Context.Audio.Endpoints[PL_AudioEndpoint_Capture].Commands[PL_AudioCommand_Resume], 1, 0);
+}
+
+static void PL_Media_Audio_ResetAudioCapture(void) {
+	ReleaseSemaphore(Context.Audio.Endpoints[PL_AudioEndpoint_Capture].Commands[PL_AudioCommand_Reset], 1, 0);
+}
+
 static void PL_Media_Audio_SetAudioDevice(PL_AudioDevice const *device) {
 	Assert((device >= Context.IoDevice.AudioRenderDevices.Data && 
 			device <= Context.IoDevice.AudioRenderDevices.Data + Context.IoDevice.AudioRenderDevices.Count) ||
@@ -1516,8 +1592,8 @@ static void PL_Media_Audio_SetAudioDevice(PL_AudioDevice const *device) {
 	}
 }
 
-static bool PL_AudioEndpoint_InitRender(void) {
-	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[PL_AudioEndpoint_Render];
+static bool PL_AudioEndpoint_Init(PL_AudioEndpointKind kind) {
+	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[kind];
 
 	endpoint->Commands[PL_AudioCommand_Update] = CreateEventW(nullptr, FALSE, FALSE, nullptr);
 	if (!endpoint->Commands[PL_AudioCommand_Update]) {
@@ -1533,24 +1609,24 @@ static bool PL_AudioEndpoint_InitRender(void) {
 		}
 	}
 
-	endpoint->Thread = CreateThread(nullptr, 0, PL_AudioRenderThread, nullptr, 0, 0);
+	endpoint->Thread = CreateThread(nullptr, 0, PL_AudioThread, (LPVOID)kind, 0, 0);
 	if (!endpoint->Thread) {
 		return false;
 	}
 
-	Context.VTable.IsAudioRendering  = PL_Media_Audio_IsAudioRendering;
-	Context.VTable.UpdateAudioRender = PL_Media_Audio_UpdateAudioRender;
-	Context.VTable.PauseAudioRender  = PL_Media_Audio_PauseAudioRender;
-	Context.VTable.ResumeAudioRender = PL_Media_Audio_ResumeAudioRender;
-	Context.VTable.ResetAudioRender  = PL_Media_Audio_ResetAudioRender;
-	Context.VTable.SetAudioDevice    = PL_Media_Audio_SetAudioDevice;
+	if (kind == PL_AudioEndpoint_Render) {
+		Context.VTable.IsAudioRendering   = PL_Media_Audio_IsAudioRendering;
+		Context.VTable.UpdateAudioRender  = PL_Media_Audio_UpdateAudioRender;
+		Context.VTable.PauseAudioRender   = PL_Media_Audio_PauseAudioRender;
+		Context.VTable.ResumeAudioRender  = PL_Media_Audio_ResumeAudioRender;
+		Context.VTable.ResetAudioRender   = PL_Media_Audio_ResetAudioRender;
+	} else {
+		Context.VTable.IsAudioCapturing   = PL_Media_Audio_IsAudioCapturing;
+		Context.VTable.PauseAudioCapture  = PL_Media_Audio_PauseAudioCapture;
+		Context.VTable.ResumeAudioCapture = PL_Media_Audio_ResumeAudioCapture;
+		Context.VTable.ResetAudioCapture  = PL_Media_Audio_ResetAudioCapture;
+	}
 
-	return true;
-}
-
-static bool PL_AudioEndpoint_InitCapture(void) {
-	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[PL_AudioEndpoint_Capture];
-	Unimplemented();
 	return true;
 }
 
@@ -1575,19 +1651,23 @@ static void PL_Media_Audio_InitVTable(void) {
 
 	PL_Media_EnumerateAudioDevices();
 
+	Context.VTable.SetAudioDevice = PL_Media_Audio_SetAudioDevice;
+
 	if (Context.Config.Audio.Render) {
-		if (!PL_AudioEndpoint_InitRender()) {
+		if (!PL_AudioEndpoint_Init(PL_AudioEndpoint_Render)) {
 			PL_AudioEndpoint_Release(&Context.Audio.Endpoints[PL_AudioEndpoint_Render]);
 			LogWarning("Windows: Failed to initialize audio device for rendering. Reason: %s\n", PL_GetLastError());
 		}
 	}
 
 	if (Context.Config.Audio.Capture) {
-		if (!PL_AudioEndpoint_InitCapture()) {
+		if (!PL_AudioEndpoint_Init(PL_AudioEndpoint_Capture)) {
 			PL_AudioEndpoint_Release(&Context.Audio.Endpoints[PL_AudioEndpoint_Capture]);
 			LogWarning("Windows: Failed to initialize audio device for capturing. Reason: %s\n", PL_GetLastError());
 		}
 	}
+
+	Context.Features |= PL_Feature_Audio;
 }
 
 static void PL_Media_Load(void) {

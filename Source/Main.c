@@ -871,12 +871,53 @@ WaveForm GenerateSineWave(float freq, float amp) {
 }
 #endif
 
+#define MAX_CAPTURE_FRAME_SIZE (48000*16)
+static i16  CapturesFrames[MAX_CAPTURE_FRAME_SIZE*2];
+static int  CapturePos;
+
+u32 CaptureAudio(PL_AudioSpec const *spec, u8 *in, u32 frames, void *data) {
+	Assert(spec->Format == PL_AudioFormat_R32 && spec->Channels == 2);
+
+	if (in) {
+		float *samples = (float *)in;
+
+		for (int i = 0; i < (int)frames; i += 1) {
+			CapturesFrames[CapturePos * 2 + 0] = (i16)MapRange(-1.0f, 1.0f, INT16_MIN, INT16_MAX, samples[i * 2 + 0]);
+			CapturesFrames[CapturePos * 2 + 1] = (i16)MapRange(-1.0f, 1.0f, INT16_MIN, INT16_MAX, samples[i * 2 + 1]);
+			CapturePos = (CapturePos + 1) % MAX_CAPTURE_FRAME_SIZE;
+		}
+	} else {
+		for (int i = 0; i < (int)frames; i += 1) {
+			CapturesFrames[CapturePos * 2 + 0] = 0;
+			CapturesFrames[CapturePos * 2 + 1] = 0;
+			CapturePos = (CapturePos + 1) % MAX_CAPTURE_FRAME_SIZE;
+		}
+	}
+
+	return frames;
+}
+
+static int CaptureRead = 0;
+
 u32 RenderAudio(PL_AudioSpec const *spec, u8 *out, u32 frames, void *data) {
+#if 1
 	return UploadAudioFrames(spec, out, frames, data);
+#else
+	float *samples = (float *)out;
+
+	for (int i = 0; i < (int)frames; ++i) {
+		samples[i * 2 + 0] = MapRange(INT16_MIN, INT16_MAX, -1, 1, CapturesFrames[CaptureRead * 2 + 0]);
+		samples[i * 2 + 1] = MapRange(INT16_MIN, INT16_MAX, -1, 1, CapturesFrames[CaptureRead * 2 + 1]);
+		CaptureRead = (CaptureRead + 1) % MAX_CAPTURE_FRAME_SIZE;
+	}
+
+	return frames;
+#endif
 }
 
 void HandleEvent(PL_Event const *event, void *data) {
 	if (event->Kind == PL_Event_Startup) {
+		PL_ResumeAudioCapture();
 		PL_UpdateAudioRender();
 		PL_ResumeAudioRender();
 	} else {
@@ -901,7 +942,7 @@ void UpdateFrame(PL_IoDevice const *io, void *data) {
 		LogTrace("Capture Devices:\n");
 		for (int i = 0; i < io->AudioCaptureDevices.Count; ++i) {
 			const char *details = io->AudioCaptureDevices.Current == &io->AudioCaptureDevices.Data[i] ? " - default" : "";
-			LogTrace("\t%d. %s\n", i, io->AudioCaptureDevices.Data[i].Name);
+			LogTrace("\t%d. %s%s\n", i, io->AudioCaptureDevices.Data[i].Name, details);
 		}
 	}
 }
@@ -930,6 +971,8 @@ int Main(int argc, char **argv) {
 	//WaveForms[WaveFormCount++] = GenerateSineWave(8192, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(16384, 0.5f);
 
+	//WaveForms[WaveFormCount++] = (WaveForm) { .Frequency = 48000, .Count = MAX_CAPTURE_FRAME_SIZE, .Frames = CapturesFrames };
+
 	for (int i = 1; i < argc; ++i) {
 		const char *path = argv[i];
 
@@ -948,11 +991,12 @@ int Main(int argc, char **argv) {
 		.Features = PL_Feature_Window | PL_Feature_Audio,
 		.Window   = { .Title = "Audio Processing" },
 		.Flags    = PL_Flag_ToggleFullscreenF11 | PL_Flag_ExitAltF4,
-		.Audio    = { .Render = 1 },
+		.Audio    = { .Render = 1, .Capture = 1 },
 		.User     = {
-			.OnEvent       = HandleEvent,
-			.OnUpdate      = UpdateFrame,
-			.OnAudioRender = RenderAudio,
+			.OnEvent        = HandleEvent,
+			.OnUpdate       = UpdateFrame,
+			.OnAudioRender  = RenderAudio,
+			.OnAudioCapture = CaptureAudio
 		},
 	};
 
