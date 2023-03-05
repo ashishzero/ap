@@ -1,4 +1,5 @@
-#include "KrMedia.h"
+#if 1
+#include "Kr/KrMedia.h"
 #include "Kr/KrMath.h"
 
 #include <stdio.h>
@@ -183,7 +184,7 @@ void Transform(Complex *buf, uint length) {
 	}
 }
 
-void Process(const KrAudioSpec *spec) {
+void Process(const PL_AudioSpec *spec) {
 	if (OutputFramePos < HopLength)
 		return;
 
@@ -391,8 +392,8 @@ void Process(const KrAudioSpec *spec) {
 	}
 }
 
-u32 UploadAudioFrames(const KrAudioSpec *spec, u8 *buf, u32 count, void *user) {
-	Assert(spec->Format == KrAudioFormat_R32 && spec->Channels == 2);
+u32 UploadAudioFrames(const PL_AudioSpec *spec, u8 *buf, u32 count, void *user) {
+	Assert(spec->Format == PL_AudioFormat_R32 && spec->Channels == 2);
 
 	F32FrameStereo   *dst = (F32FrameStereo *)buf;
 	F32FrameStereo   *end = dst + count;
@@ -553,48 +554,43 @@ void PrevWaveForm() {
 	ResetWaveform();
 }
 
-void HandleEvent(const KrEvent *event, void *user) {
-	if (event->Kind == KrEvent_Startup) {
-		KrAudio_Update();
-		KrAudio_Resume();
-	}
-
-	if (event->Kind == KrEvent_KeyPressed && !event->Key.Repeat) {
-		if (event->Key.Code == KrKey_Space) {
-			if (KrAudio_IsPlaying()) {
-				KrAudio_Pause();
+void PlayerHandleEvent(const PL_Event *event, void *user) {
+	if (event->Kind == PL_Event_KeyPressed && !event->Key.Repeat) {
+		if (event->Key.Sym == PL_Key_Space) {
+			if (PL_IsAudioRendering()) {
+				PL_PauseAudioRender();
 			} else {
-				KrAudio_Resume();
+				PL_ResumeAudioRender();
 			}
 		}
-		if (event->Key.Code == KrKey_F11) {
-			KrWindow_ToggleFullscreen();
+		if (event->Key.Sym == PL_Key_F11) {
+			PL_ToggleFullscreen();
 		}
 	}
 
-	if (event->Kind == KrEvent_KeyPressed) {
-		if (event->Key.Code == KrKey_Q) {
+	if (event->Kind == PL_Event_KeyPressed) {
+		if (event->Key.Sym == PL_Key_Q) {
 			QFactor = Clamp(0.0f, 1.0f, QFactor - 0.1f);
 			printf("Q = %f\n", QFactor);
-		} else if (event->Key.Code == KrKey_W) {
+		} else if (event->Key.Sym == PL_Key_W) {
 			QFactor = Clamp(0.0f, 1.0f, QFactor + 0.1f);
 			printf("Q = %f\n", QFactor);
 		}
 
-		if (event->Key.Code == KrKey_A) {
+		if (event->Key.Sym == PL_Key_A) {
 			QFreq = Clamp(0.0f, 1.0f, QFreq - 0.1f);
 			printf("QFreq = %f\n", QFreq);
-		} else if (event->Key.Code == KrKey_S) {
+		} else if (event->Key.Sym == PL_Key_S) {
 			QFreq = Clamp(0.0f, 1.0f, QFreq + 0.1f);
 			printf("QFreq = %f\n", QFreq);
 		}
 
-		if (event->Key.Code == KrKey_Return) {
+		if (event->Key.Sym == PL_Key_Return) {
 			ApplyTransformation = !ApplyTransformation;
 		}
 
-		if (event->Key.Code == KrKey_Left || event->Key.Code == KrKey_Right) {
-			int direction = event->Key.Code == KrKey_Left ? -1 : 1;
+		if (event->Key.Sym == PL_Key_Left || event->Key.Sym == PL_Key_Right) {
+			int direction = event->Key.Sym == PL_Key_Left ? -1 : 1;
 			int magnitude = event->Key.Repeat ? 5 : 10;
 			float next = G.Pos + (direction * magnitude) * 48000;
 			next = Clamp(0, (float)G.Last, next);
@@ -602,30 +598,30 @@ void HandleEvent(const KrEvent *event, void *user) {
 			ClearHistory();
 		}
 
-		if (event->Key.Code == KrKey_Plus) {
+		if (event->Key.Sym == PL_Key_Plus) {
 			G.PitchShift += 0.5f;
 			printf("PitchShift = %f\n", G.PitchShift);
-		} else if (event->Key.Code == KrKey_Minus) {
+		} else if (event->Key.Sym == PL_Key_Minus) {
 			G.PitchShift -= 0.5f;
 			printf("PitchShift = %f\n", G.PitchShift);
 		}
 
-		if (event->Key.Code == KrKey_N) {
+		if (event->Key.Sym == PL_Key_N) {
 			NextWaveForm();
-		} else if (event->Key.Code == KrKey_B) {
+		} else if (event->Key.Sym == PL_Key_B) {
 			PrevWaveForm();
 		}
 
-		if (event->Key.Code == KrKey_Up || event->Key.Code == KrKey_Down) {
-			float direction = event->Key.Code == KrKey_Down ? -1.0f : 1.0f;
+		if (event->Key.Sym == PL_Key_Up || event->Key.Sym == PL_Key_Down) {
+			float direction = event->Key.Sym == PL_Key_Down ? -1.0f : 1.0f;
 			float magnitude = event->Key.Repeat ? 0.01f : 0.02f;
 			float next = G.Volume + direction * magnitude;
 			next = Clamp(0.0f, 1.0f, next);
 			G.Volume = next;
 		}
 
-		if (event->Key.Code >= KrKey_0 && event->Key.Code <= KrKey_9) {
-			float fraction = (float)(event->Key.Code - KrKey_0) / 10.0f;
+		if (event->Key.Sym >= PL_Key_0 && event->Key.Sym <= PL_Key_9) {
+			float fraction = (float)(event->Key.Sym - PL_Key_0) / 10.0f;
 			G.Pos = fraction * (float)G.Last;
 			ClearHistory();
 		}
@@ -671,6 +667,7 @@ Quad LerpQuad(Quad a, Quad b, float t) {
 	return r;
 }
 
+#if 0
 // TODO: cleanup this mess
 void PL_DrawQuad(float p0[2], float p1[2], float p2[2], float p3[2], float color0[4], float color1[4], float color2[4], float color3[4]);
 void PL_DrawRect(float x, float y, float w, float h, float color0[4], float color1[4]);
@@ -845,6 +842,7 @@ void Update(float window_w, float window_h, void *data) {
 	//PL_DrawQuad(pause_button0.p0, pause_button0.p1, pause_button0.p2, pause_button0.p3, progress_fg, progress_fg, progress_fg, progress_fg);
 	//PL_DrawQuad(pause_button1.p0, pause_button1.p1, pause_button1.p2, pause_button1.p3, progress_fg, progress_fg, progress_fg, progress_fg);
 }
+#endif
 
 WaveForm GenerateSineWave(float freq, float amp) {
 	uint samples = 2 * 2 * 48000 / (uint)freq;
@@ -871,42 +869,36 @@ WaveForm GenerateSineWave(float freq, float amp) {
 		.Frequency = 48000.0f
 	};
 }
-
-int Main(int argc, char **argv, KrUserContext *ctx) {
-#if 0
-	Complex data[] = { {2},{1},{-1},{5},{0},{3},{0},{-4} };
-
-	printf("===============================================\n");
-
-	for (uint index = 0; index < ArrayCount(data); ++index) {
-		printf("%f, %f\n", data[index].re, data[index].im);
-	}
-
-	InplaceFFT(data, ArrayCount(data));
-
-	printf("===============================================\n");
-
-	for (uint index = 0; index < ArrayCount(data); ++index) {
-		printf("%f, %f\n", data[index].re, data[index].im);
-	}
-
-	printf("===============================================\n");
-
-	InplaceInvFFT(data, ArrayCount(data));
-
-	for (uint index = 0; index < ArrayCount(data); ++index) {
-		printf("%f, %f\n", data[index].re, data[index].im);
-	}
-
-	printf("===============================================\n");
 #endif
 
-	if (argc <= 1) {
-		Usage(argv[0]);
-	}
+u32 RenderAudio(PL_AudioSpec const *spec, u8 *out, u32 frames, void *data) {
+	return UploadAudioFrames(spec, out, frames, data);
+}
 
+void HandleEvent(PL_Event const *event, void *data) {
+	if (event->Kind == PL_Event_Startup) {
+		PL_UpdateAudioRender();
+		PL_ResumeAudioRender();
+	} else {
+		PlayerHandleEvent(event, data);
+	}
+}
+
+void UpdateFrame(PL_IoDevice const *io, void *data) {
+	if (io->Keyboard.Keys[PL_Key_Space].Pressed) {
+		LogTrace("Render Devices:\n");
+		for (int i = 0; i < io->AudioRenderDevices.Count; ++i) {
+			LogTrace("\t%d. %s\n", i, io->AudioRenderDevices.Data[i].Name);
+		}
+		LogTrace("Capture Devices:\n");
+		for (int i = 0; i < io->AudioCaptureDevices.Count; ++i) {
+			LogTrace("\t%d. %s\n", i, io->AudioCaptureDevices.Data[i].Name);
+		}
+	}
+}
+
+int Main(int argc, char **argv) {
 	InitWindow();
-	ClearHistory();
 
 	int cap_waveforms = argc * 100;
 
@@ -919,7 +911,7 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 	//WaveForms[WaveFormCount++] = GenerateSineWave(25, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(30, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(45, 0.5f);
-	WaveForms[WaveFormCount++] = GenerateSineWave(60, 0.5f);
+	//WaveForms[WaveFormCount++] = GenerateSineWave(60, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(120, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(240, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(512, 0.5f);
@@ -943,9 +935,23 @@ int Main(int argc, char **argv, KrUserContext *ctx) {
 
 	ResetWaveform();
 
-	ctx->OnEvent = HandleEvent;
-	ctx->OnUpdate = Update;
-	ctx->OnUploadAudio = UploadAudioFrames;
+	PL_Config config = {
+		.Features = PL_Feature_Window | PL_Feature_Audio,
+		.Window   = { .Title = "Audio Processing" },
+		.Flags    = PL_Flag_ToggleFullscreenF11 | PL_Flag_ExitAltF4,
+		.Audio    = { .Render = 1 },
+		.User     = {
+			.OnEvent       = HandleEvent,
+			.OnUpdate      = UpdateFrame,
+			.OnAudioRender = RenderAudio,
+		},
+	};
+
+#ifdef M_BUILD_DEBUG
+	config.Flags |= PL_Flag_ExitEscape;
+#endif
+
+	PL_SetConfig(&config);
 
 	return 0;
 }

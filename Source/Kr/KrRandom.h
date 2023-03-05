@@ -1,6 +1,6 @@
 #pragma once
 
-#include "KrBase.h"
+#include "KrPlatform.h"
 
 u32   RandomEx(RandomSource *rng);
 u32   RandomBoundEx(RandomSource *rng, u32 bound);

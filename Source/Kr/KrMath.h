@@ -1,6 +1,6 @@
 #pragma once
 
-#include "KrBase.h"
+#include "KrPlatform.h"
 
 #include <math.h>
 

@@ -180,8 +180,6 @@ static inline void Unreachable(void) { TriggerBreakpoint(); }
 
 #define NoDefaultCase() default: Unreachable(); break
 
-_Noreturn static inline void Unimplemented(void) { TriggerBreakpoint(); }
-
 //
 //
 //
@@ -248,16 +246,23 @@ typedef ptrdiff_t             imem;
 #define MB(n)                 (KB(n) * 1024ULL)
 #define GB(n)                 (MB(n) * 1024ULL)
 
+void HandleAssertion(const char *file, int line, const char *proc, const char *msg);
+
 #if defined(M_BUILD_DEBUG) || defined(M_BUILD_DEVELOP) || defined(M_FORCE_ASSERTIONS)
-#define Assert(x)             do {                                        \
-                                if (!(x)) {                               \
-                                    HandleAssertion(__FILE__, __LINE__);  \
-                                    TriggerBreakpoint();                  \
-                                }                                         \
+#define Assert(x)             do {                                                          \
+                                if (!(x)) {                                                 \
+                                    HandleAssertion(__FILE__, __LINE__, __PROCEDURE__, #x); \
+                                    TriggerBreakpoint();                                    \
+                                }                                                           \
                               } while (0)
 #else
 #define Assert(x)
 #endif
+
+_Noreturn static inline void UnimplementedImpl(const char *file, int line, const char *proc) {
+    HandleAssertion(file, line, proc, "Unimplemented");
+}
+#define Unimplemented()      UnimplementedImpl(__FILE__, __LINE__, __PROCEDURE__)
 
 typedef struct RandomSource {
     u64 state;
@@ -273,8 +278,8 @@ typedef struct LogAgent {
     void * Data;
 } LogAgent;
 
-typedef void (*AssertionHandler)(const char *, int);
-typedef void (*FatalErrorHandler)();
+typedef void (*AssertionHandler)(const char *, int, const char *, const char *);
+typedef void (*FatalErrorHandler)(const char *);
 
 struct ThreadContext {
 	RandomSource      Random;
@@ -289,5 +294,4 @@ void LogEx(enum LogKind kind, const char *fmt, ...);
 void LogTrace(const char *fmt, ...);
 void LogWarning(const char *fmt, ...);
 void LogError(const char *fmt, ...);
-void HandleAssertion(const char *file, int line);
-void FatalError();
+void FatalError(const char *msg);

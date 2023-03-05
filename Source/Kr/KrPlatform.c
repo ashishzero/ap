@@ -1,18 +1,15 @@
-#include "krBase.h"
+#include "KrPlatform.h"
 
-#include <stdlib.h>
-#include <stdio.h>
-
-static void DefaultAssertionHandlerProc(const char *file, int line) {
+static void DefaultAssertionHandlerProc(const char *file, int line, const char *proc, const char *msg) {
+	TriggerBreakpoint();
 }
 
-static void DefaultFatalErrorHandlerProc() {
-	exit(1);
+static void DefaultFatalErrorHandlerProc(const char *msg) {
+	TriggerBreakpoint();
 }
 
 static void DefaultLoggerProc(void *data, enum LogKind kind, const char *fmt, va_list args) {
-	FILE *out = kind == LogKind_Error ? stderr : stdout;
-	vfprintf(out, fmt, args);
+	TriggerBreakpoint();
 }
 
 thread_local struct ThreadContext Thread = {
@@ -50,10 +47,11 @@ void LogError(const char *fmt, ...) {
 	va_end(args);
 }
 
-void HandleAssertion(const char *file, int line) {
-	Thread.OnAssertion(file, line);
+void HandleAssertion(const char *file, int line, const char *proc, const char *msg) {
+	Thread.OnAssertion(file, line, proc, msg);
 }
 
-void FatalError() {
-	Thread.OnFatalError();
+void FatalError(const char *msg) {
+	LogError("Fatal Error: ", msg);
+	Thread.OnFatalError(msg);
 }

@@ -18,13 +18,7 @@
     <ClCompile Include="Source\Main.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Source\Windows\KrMediaImpl.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Source\KrMedia.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Source\Kr\KrBase.c">
+    <ClCompile Include="Source\Kr\KrPlatform.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Source\Kr\KrMath.c">
@@ -36,24 +30,33 @@
     <ClCompile Include="Source\Kr\KrTwiddleFactors.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Kr\KrWindows.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Kr\KrMemory.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Source\KrMedia.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Source\KrMediaImpl.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Kr\KrBase.h">
+    <ClInclude Include="Source\Kr\KrPlatform.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Source\Kr\KrMath.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Source\Kr\KrRandom.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Kr\KrMedia.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Kr\KrMediaInternal.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Kr\KrMemory.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
