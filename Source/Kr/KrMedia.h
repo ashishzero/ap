@@ -167,7 +167,7 @@ typedef struct PL_Config {
 } PL_Config;
 
 typedef struct PL_KeyState {
-	u8 IsDown;
+	u8 Down;
 	u8 Pressed;
 	u8 Released;
 	u8 Transitions;
@@ -178,7 +178,7 @@ typedef struct PL_Keyboard {
 } PL_Keyboard;
 
 typedef struct PL_MouseButtonState {
-	u8 IsDown;
+	u8 Down;
 	u8 Pressed;
 	u8 Released;
 	u8 Transitions;
@@ -204,6 +204,8 @@ typedef struct PL_AudioDevice {
 typedef struct PL_AudioDeviceList {
 	imem            Count;
 	PL_AudioDevice *Data;
+	PL_AudioDevice *Current;
+	bool            Default;
 } PL_AudioDeviceList;
 
 typedef struct PL_IoDevice {
@@ -213,20 +215,21 @@ typedef struct PL_IoDevice {
 	PL_AudioDeviceList AudioCaptureDevices;
 } PL_IoDevice;
 
-extern int Main(int, char **);
+extern int      Main(int, char **);
 
-i32        PL_AtomicAdd(volatile i32 *dst, i32 val);
-i32        PL_AtomicCmpExg(volatile i32 *dst, i32 exchange, i32 compare);
-void *     PL_AtomicCmpExgPtr(void *volatile *dst, void *exchange, void *compare);
-i32        PL_AtomicExg(volatile i32 *dst, i32 val);
-void       PL_AtomicLock(volatile i32 *lock);
-void       PL_AtomicUnlock(volatile i32 *lock);
+i32             PL_AtomicAdd(volatile i32 *dst, i32 val);
+i32             PL_AtomicCmpExg(volatile i32 *dst, i32 exchange, i32 compare);
+void *          PL_AtomicCmpExgPtr(void *volatile *dst, void *exchange, void *compare);
+i32             PL_AtomicExg(volatile i32 *dst, i32 val);
+void            PL_AtomicLock(volatile i32 *lock);
+void            PL_AtomicUnlock(volatile i32 *lock);
 
-void       PL_SetConfig(PL_Config const *config);
-bool       PL_IsFullscreen(void);
-void       PL_ToggleFullscreen(void);
-bool       PL_IsAudioRendering(void);
-void       PL_UpdateAudioRender(void);
-void       PL_PauseAudioRender(void);
-void       PL_ResumeAudioRender(void);
-void       PL_ResetAudioRender(void);
+void            PL_SetConfig(PL_Config const *config);
+bool            PL_IsFullscreen(void);
+void            PL_ToggleFullscreen(void);
+bool            PL_IsAudioRendering(void);
+void            PL_UpdateAudioRender(void);
+void            PL_PauseAudioRender(void);
+void            PL_ResumeAudioRender(void);
+void            PL_ResetAudioRender(void);
+void            PL_SetAudioDevice(PL_AudioDevice const *device);

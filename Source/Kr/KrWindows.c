@@ -222,6 +222,7 @@ typedef struct PL_ContextVTable {
 	void (*PauseAudioRender)  (void);
 	void (*ResumeAudioRender) (void);
 	void (*ResetAudioRender)  (void);
+	void (*SetAudioDevice)    (PL_AudioDevice const *);
 } PL_ContextVTable;
 
 typedef struct PL_Context {
@@ -240,13 +241,14 @@ typedef struct PL_Context {
 	PL_Config             Config;
 } PL_Context;
 
-static bool PL_Media_Fallback_IsFullscreen(void)                         { return false; }
-static void PL_Media_Fallback_ToggleFullscreen(void)                     { }
-static bool PL_Media_Fallback_IsAudioRendering(void)                     { return false; }
-static void PL_Media_Fallback_UpdateAudioRender(void)                    {}
-static void PL_Media_Fallback_PauseAudioRender(void)                     {}
-static void PL_Media_Fallback_ResumeAudioRender(void)                    {}
-static void PL_Media_Fallback_ResetAudioRender(void)                     {}
+static bool PL_Media_Fallback_IsFullscreen(void)                           { return false; }
+static void PL_Media_Fallback_ToggleFullscreen(void)                       { }
+static bool PL_Media_Fallback_IsAudioRendering(void)                       { return false; }
+static void PL_Media_Fallback_UpdateAudioRender(void)                      {}
+static void PL_Media_Fallback_PauseAudioRender(void)                       {}
+static void PL_Media_Fallback_ResumeAudioRender(void)                      {}
+static void PL_Media_Fallback_ResetAudioRender(void)                       {}
+static void PL_Media_Fallback_SetAudioDevice(PL_AudioDevice const *device) {}
 
 static void PL_User_Fallback_OnEvent(PL_Event const *event, void *data)                               {}
 static void PL_User_Fallback_OnUpdate(PL_IoDevice const *io, void *data)                              {}
@@ -254,18 +256,19 @@ static u32  PL_User_Fallback_OnAudioRender(PL_AudioSpec const *spec, u8 *out, u3
 
 static PL_Context Context = {
 	.VTable = {
-		.IsFullscreen      = PL_Media_Fallback_IsFullscreen,
-		.ToggleFullscreen  = PL_Media_Fallback_ToggleFullscreen,
-		.IsAudioRendering  = PL_Media_Fallback_IsAudioRendering,
-		.UpdateAudioRender = PL_Media_Fallback_UpdateAudioRender,
-		.PauseAudioRender  = PL_Media_Fallback_PauseAudioRender,
-		.ResumeAudioRender = PL_Media_Fallback_ResumeAudioRender,
-		.ResetAudioRender  = PL_Media_Fallback_ResetAudioRender
+		.IsFullscreen         = PL_Media_Fallback_IsFullscreen,
+		.ToggleFullscreen     = PL_Media_Fallback_ToggleFullscreen,
+		.IsAudioRendering     = PL_Media_Fallback_IsAudioRendering,
+		.UpdateAudioRender    = PL_Media_Fallback_UpdateAudioRender,
+		.PauseAudioRender     = PL_Media_Fallback_PauseAudioRender,
+		.ResumeAudioRender    = PL_Media_Fallback_ResumeAudioRender,
+		.ResetAudioRender     = PL_Media_Fallback_ResetAudioRender,
+		.SetAudioDevice       = PL_Media_Fallback_SetAudioDevice,
 	},
 	.UserVTable = {
-		.OnEvent           = PL_User_Fallback_OnEvent,
-		.OnUpdate          = PL_User_Fallback_OnUpdate,
-		.OnAudioRender     = PL_User_Fallback_OnAudioRender
+		.OnEvent              = PL_User_Fallback_OnEvent,
+		.OnUpdate             = PL_User_Fallback_OnUpdate,
+		.OnAudioRender        = PL_User_Fallback_OnAudioRender
 	}
 };
 
@@ -312,6 +315,10 @@ void PL_ResumeAudioRender(void) {
 
 void PL_ResetAudioRender(void) {
 	Context.VTable.ResetAudioRender();
+}
+
+void PL_SetAudioDevice(PL_AudioDevice const *device) {
+	Context.VTable.SetAudioDevice(device);
 }
 
 //
@@ -394,6 +401,7 @@ static void PL_ActivateAudioDevice(PL_AudioDeviceNative *native) {
 
 	for (imem i = devices->Count; i > pos; i -= 1) {
 		devices->Data[i] = devices->Data[i - 1];
+		PL_AudioDeviceNative *handle = devices->Data[i].Handle;
 	}
 	devices->Data[pos] = (PL_AudioDevice){ .Handle = native, .Name = native->Name };
 	devices->Count += 1;
@@ -415,9 +423,30 @@ static void PL_DeactivateAudioDevice(PL_AudioDeviceNative *native) {
 	if (res == 0) {
 		for (imem i = pos; i < devices->Count - 1; i += 1) {
 			devices->Data[i] = devices->Data[i + 1];
+			PL_AudioDeviceNative *handle = devices->Data[i].Handle;
 		}
 		devices->Count -= 1;
 	}
+}
+
+static void PL_UnsetCurrentAudioDevice(PL_AudioEndpointKind endpoint) {
+	PL_AudioDeviceList *devices = endpoint == PL_AudioEndpoint_Render ? &Context.IoDevice.AudioRenderDevices : &Context.IoDevice.AudioCaptureDevices;
+	devices->Default = false;
+	devices->Current = 0;
+}
+
+static void PL_SetCurrentAudioDevice(PL_AudioDeviceNative *native) {
+	PL_AudioDeviceList *devices = native->IsCapture == 0 ? &Context.IoDevice.AudioRenderDevices : &Context.IoDevice.AudioCaptureDevices;
+
+	for (int i = 0; i < devices->Count; ++i) {
+		if (devices->Data[i].Handle == native) {
+			devices->Current = &devices->Data[i];
+			break;
+		}
+	}
+
+	PL_AudioEndpointKind endpoint = native->IsCapture ? PL_AudioEndpoint_Capture : PL_AudioEndpoint_Render;
+	devices->Default = PL_AtomicCmpExgPtr(&Context.Audio.Endpoints[endpoint].DesiredDevice, nullptr, nullptr) == nullptr;
 }
 
 static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam, LPARAM lparam) {
@@ -526,11 +555,11 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			PL_MouseButtonState *button = &Context.IoDevice.Mouse.Buttons[PL_Button_Left];
 			if (msg == WM_LBUTTONDOWN) {
 				event.Kind       = PL_Event_ButtonPressed;
-				button->IsDown   = 1;
+				button->Down   = 1;
 				button->Pressed  = 1;
 			} else {
 				event.Kind       = PL_Event_ButtonReleased;
-				button->IsDown   = 0;
+				button->Down   = 0;
 				button->Released = 1;
 				button->Transitions += 1;
 			}
@@ -548,11 +577,11 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			PL_MouseButtonState *button = &Context.IoDevice.Mouse.Buttons[PL_Button_Right];
 			if (msg == WM_RBUTTONDOWN) {
 				event.Kind       = PL_Event_ButtonPressed;
-				button->IsDown   = 1;
+				button->Down   = 1;
 				button->Pressed  = 1;
 			} else {
 				event.Kind       = PL_Event_ButtonReleased;
-				button->IsDown   = 0;
+				button->Down   = 0;
 				button->Released = 1;
 				button->Transitions += 1;
 			}
@@ -570,11 +599,11 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			PL_MouseButtonState *button = &Context.IoDevice.Mouse.Buttons[PL_Button_Middle];
 			if (msg == WM_MBUTTONDOWN) {
 				event.Kind       = PL_Event_ButtonPressed;
-				button->IsDown   = 1;
+				button->Down   = 1;
 				button->Pressed  = 1;
 			} else {
 				event.Kind       = PL_Event_ButtonReleased;
-				button->IsDown   = 0;
+				button->Down   = 0;
 				button->Released = 1;
 				button->Transitions += 1;
 			}
@@ -645,12 +674,12 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 				bool repeat = HIWORD(lparam) & KF_REPEAT;
 
 				if (msg == WM_KEYDOWN) {
-					key->IsDown = 1;
+					key->Down = 1;
 					if (!repeat)
 						key->Pressed = 1;
 					event.Kind = PL_Event_KeyPressed;
 				} else {
-					key->IsDown   = 0;
+					key->Down   = 0;
 					key->Released = 1;
 					key->Transitions += 1;
 					event.Kind = PL_Event_KeyReleased;
@@ -678,12 +707,12 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 				bool repeat = HIWORD(lparam) & KF_REPEAT;
 
 				if (msg == WM_SYSKEYDOWN) {
-					key->IsDown = 1;
+					key->Down = 1;
 					if (!repeat)
 						key->Pressed = 1;
 					event.Kind = PL_Event_KeyPressed;
 				} else {
-					key->IsDown   = 0;
+					key->Down   = 0;
 					key->Released = 1;
 					key->Transitions += 1;
 					event.Kind = PL_Event_KeyReleased;
@@ -775,6 +804,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			event.Audio.NativeHandle = 0;
 			event.Audio.Name         = nullptr;
 			Context.UserVTable.OnEvent(&event, Context.UserVTable.Data);
+			PL_UnsetCurrentAudioDevice(event.Audio.Endpoint);
 		} break;
 
 		case PL_WM_AUDIO_DEVICE_CHANGED: {
@@ -785,6 +815,7 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			event.Audio.NativeHandle      = native;
 			event.Audio.Name              = native->Name;
 			Context.UserVTable.OnEvent(&event, Context.UserVTable.Data);
+			PL_SetCurrentAudioDevice(native);
 		} break;
 
 		default: {
@@ -1052,7 +1083,7 @@ HRESULT STDMETHODCALLTYPE PL_OnDefaultDeviceChanged(IMMNotificationClient *this_
 		}
 		PL_AudioDevice *desired = PL_AtomicCmpExgPtr(&Context.Audio.Endpoints[PL_AudioEndpoint_Render].DesiredDevice, nullptr, nullptr);
 		if (desired == nullptr) {
-			ReleaseSemaphore(Context.Audio.Endpoints[PL_AudioEndpoint_Render].Commands[PL_AudioCommand_LoadDesired], 1, 0);
+			ReleaseSemaphore(Context.Audio.Endpoints[PL_AudioEndpoint_Render].Commands[PL_AudioCommand_LoadDefault], 1, 0);
 		}
 	} else if (flow == eCapture) {
 		if (!device_id) {
@@ -1062,7 +1093,7 @@ HRESULT STDMETHODCALLTYPE PL_OnDefaultDeviceChanged(IMMNotificationClient *this_
 		}
 		PL_AudioDevice *desired = PL_AtomicCmpExgPtr(&Context.Audio.Endpoints[PL_AudioEndpoint_Capture].DesiredDevice, nullptr, nullptr);
 		if (desired == nullptr) {
-			ReleaseSemaphore(Context.Audio.Endpoints[PL_AudioEndpoint_Capture].Commands[PL_AudioCommand_LoadDesired], 1, 0);
+			ReleaseSemaphore(Context.Audio.Endpoints[PL_AudioEndpoint_Capture].Commands[PL_AudioCommand_LoadDefault], 1, 0);
 		}
 	}
 
@@ -1161,6 +1192,9 @@ static void PL_Media_EnumerateAudioDevices(void) {
 
 static void PL_AudioEndpoint_Release(PL_AudioEndpoint *endpoint) {
 	if (endpoint->Thread) {
+		InterlockedExchange(&endpoint->DeviceLost, 1);
+		ReleaseSemaphore(endpoint->Commands[PL_AudioCommand_Terminate], 1, 0);
+		WaitForSingleObject(endpoint->Thread, INFINITE);
 		TerminateThread(endpoint->Thread, 0);
 		CloseHandle(endpoint->Thread);
 	}
@@ -1321,6 +1355,21 @@ static bool PL_AudioEndpoint_TryLoadRenderDevice(PL_AudioDeviceNative *native) {
 	InterlockedExchangePointer(&endpoint->EffectiveDevice, native);
 	InterlockedExchange(&endpoint->DeviceLost, 0);
 
+	PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_CHANGED, (WPARAM)Context.Audio.Endpoints[PL_AudioEndpoint_Render].EffectiveDevice, 0);
+
+	PL_AudioEndpoint_LoadFrames();
+
+	if (Context.Audio.Endpoints[PL_AudioEndpoint_Render].Resumed) {
+		IAudioClient *client = Context.Audio.Endpoints[PL_AudioEndpoint_Render].Client;
+		HRESULT hr = client->lpVtbl->Start(client);
+		if (SUCCEEDED(hr) || hr == AUDCLNT_E_NOT_STOPPED) {
+			PostMessageW(Context.Window.Handle, PL_WM_AUDIO_RESUMED, PL_AudioEndpoint_Render, 0);
+		} else {
+			InterlockedExchange(&Context.Audio.Endpoints[PL_AudioEndpoint_Render].DeviceLost, 1);
+			goto failed;
+		}
+	}
+
 	return true;
 
 failed:
@@ -1338,19 +1387,7 @@ static void PL_AudioEndpoint_RestartRenderDevice(PL_AudioDeviceNative *native) {
 	if (!PL_AudioEndpoint_TryLoadRenderDevice(native)) {
 		PL_AudioEndpoint_ReleaseRenderDevice();
 		if (native) {
-			if (PL_AudioEndpoint_TryLoadRenderDevice(nullptr)) {
-				PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_CHANGED, (WPARAM)Context.Audio.Endpoints[PL_AudioEndpoint_Render].EffectiveDevice, 0);
-				PL_AudioEndpoint_LoadFrames();
-				if (Context.Audio.Endpoints[PL_AudioEndpoint_Render].Resumed) {
-					IAudioClient *client = Context.Audio.Endpoints[PL_AudioEndpoint_Render].Client;
-					HRESULT hr = client->lpVtbl->Start(client);
-					if (SUCCEEDED(hr) || hr == AUDCLNT_E_NOT_STOPPED) {
-						PostMessageW(Context.Window.Handle, PL_WM_AUDIO_RESUMED, PL_AudioEndpoint_Render, 0);
-					} else {
-						InterlockedExchange(&Context.Audio.Endpoints[PL_AudioEndpoint_Render].DeviceLost, 1);
-					}
-				}
-			} else {
+			if (!PL_AudioEndpoint_TryLoadRenderDevice(nullptr)) {
 				PL_AudioEndpoint_ReleaseRenderDevice();
 				PostMessageW(Context.Window.Handle, PL_WM_AUDIO_DEVICE_LOST, PL_AudioEndpoint_Render, 0);
 			}
@@ -1458,6 +1495,27 @@ static void PL_Media_Audio_ResetAudioRender(void) {
 	ReleaseSemaphore(Context.Audio.Endpoints[PL_AudioEndpoint_Render].Commands[PL_AudioCommand_Reset], 1, 0);
 }
 
+static void PL_Media_Audio_SetAudioDevice(PL_AudioDevice const *device) {
+	Assert((device >= Context.IoDevice.AudioRenderDevices.Data && 
+			device <= Context.IoDevice.AudioRenderDevices.Data + Context.IoDevice.AudioRenderDevices.Count) ||
+			(device >= Context.IoDevice.AudioCaptureDevices.Data &&
+			device <= Context.IoDevice.AudioCaptureDevices.Data + Context.IoDevice.AudioCaptureDevices.Count));
+
+	PL_AudioDeviceNative * native   = device->Handle;
+	PL_AudioEndpointKind   endpoint = native->IsCapture == 0 ? PL_AudioEndpoint_Render : PL_AudioEndpoint_Capture;
+
+	PL_AudioDeviceNative *prev = InterlockedExchangePointer(&Context.Audio.Endpoints[endpoint].DesiredDevice, native);
+	if (prev != native) {
+		ReleaseSemaphore(Context.Audio.Endpoints[endpoint].Commands[PL_AudioCommand_LoadDesired], 1, 0);
+	}
+
+	if (endpoint == PL_AudioEndpoint_Render) {
+		Context.IoDevice.AudioRenderDevices.Current  = (PL_AudioDevice *)device;
+	} else {
+		Context.IoDevice.AudioCaptureDevices.Current = (PL_AudioDevice *)device;
+	}
+}
+
 static bool PL_AudioEndpoint_InitRender(void) {
 	PL_AudioEndpoint *endpoint = &Context.Audio.Endpoints[PL_AudioEndpoint_Render];
 
@@ -1485,6 +1543,7 @@ static bool PL_AudioEndpoint_InitRender(void) {
 	Context.VTable.PauseAudioRender  = PL_Media_Audio_PauseAudioRender;
 	Context.VTable.ResumeAudioRender = PL_Media_Audio_ResumeAudioRender;
 	Context.VTable.ResetAudioRender  = PL_Media_Audio_ResetAudioRender;
+	Context.VTable.SetAudioDevice    = PL_Media_Audio_SetAudioDevice;
 
 	return true;
 }

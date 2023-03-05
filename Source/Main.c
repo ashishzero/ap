@@ -885,13 +885,22 @@ void HandleEvent(PL_Event const *event, void *data) {
 }
 
 void UpdateFrame(PL_IoDevice const *io, void *data) {
-	if (io->Keyboard.Keys[PL_Key_Space].Pressed) {
+	static int index = 0;
+
+	if (io->Keyboard.Keys[PL_Key_Period].Pressed) {
+		if (io->Keyboard.Keys[PL_Key_Ctrl].Down) {
+			index = (index + 1) % io->AudioRenderDevices.Count;
+			PL_SetAudioDevice(&io->AudioRenderDevices.Data[index]);
+		}
+
 		LogTrace("Render Devices:\n");
 		for (int i = 0; i < io->AudioRenderDevices.Count; ++i) {
-			LogTrace("\t%d. %s\n", i, io->AudioRenderDevices.Data[i].Name);
+			const char *details = io->AudioRenderDevices.Current == &io->AudioRenderDevices.Data[i] ? " - default" : "";
+			LogTrace("\t%d. %s%s\n", i, io->AudioRenderDevices.Data[i].Name, details);
 		}
 		LogTrace("Capture Devices:\n");
 		for (int i = 0; i < io->AudioCaptureDevices.Count; ++i) {
+			const char *details = io->AudioCaptureDevices.Current == &io->AudioCaptureDevices.Data[i] ? " - default" : "";
 			LogTrace("\t%d. %s\n", i, io->AudioCaptureDevices.Data[i].Name);
 		}
 	}
