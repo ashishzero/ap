@@ -872,54 +872,97 @@ WaveForm GenerateSineWave(float freq, float amp) {
 #endif
 
 #define MAX_CAPTURE_FRAME_SIZE (48000*16)
-static i16  CapturesFrames[MAX_CAPTURE_FRAME_SIZE*2];
-static int  CapturePos;
+static i16   CapturesFrames[MAX_CAPTURE_FRAME_SIZE*2];
+static int   CaptureReadPos;
+static int   CaptureWritePos;
 
 u32 CaptureAudio(PL_AudioSpec const *spec, u8 *in, u32 frames, void *data) {
 	Assert(spec->Format == PL_AudioFormat_R32 && spec->Channels == 2);
+#if 1
+	LogTrace("%u frames\n", frames);
 
+	static int pos = 0;
+	float *samples = (float *)in;//WaveForms[0].Frames;
+	for (uint i = 0; i < frames; i += 1) {
+		// Redundant conversion
+		int cursor = CaptureWritePos % MAX_CAPTURE_FRAME_SIZE;
+		CapturesFrames[cursor * 2 + 0] = (i16)MapRange(-1.0f, 1.0f, INT16_MIN, INT16_MAX, samples[i * 2 + 0]);
+		CapturesFrames[cursor * 2 + 1] = (i16)MapRange(-1.0f, 1.0f, INT16_MIN, INT16_MAX, samples[i * 2 + 1]);
+		CaptureWritePos += 1;
+		pos = (pos + 1) % WaveForms[0].Count;
+	}
+#elif 1
+	float *samples = (float *)in;
+	for (int i = 0; CaptureWritePos < MAX_CAPTURE_FRAME_SIZE && i < (int)frames; ++i) {
+		CapturesFrames[CaptureWritePos * 2 + 0] = samples[i * 2 + 0];
+		CapturesFrames[CaptureWritePos * 2 + 1] = samples[i * 2 + 1];
+		CaptureWritePos += 1;
+	}
+#elif 0
 	if (in) {
 		float *samples = (float *)in;
 
 		for (int i = 0; i < (int)frames; i += 1) {
-			CapturesFrames[CapturePos * 2 + 0] = (i16)MapRange(-1.0f, 1.0f, INT16_MIN, INT16_MAX, samples[i * 2 + 0]);
-			CapturesFrames[CapturePos * 2 + 1] = (i16)MapRange(-1.0f, 1.0f, INT16_MIN, INT16_MAX, samples[i * 2 + 1]);
-			CapturePos = (CapturePos + 1) % MAX_CAPTURE_FRAME_SIZE;
+			int cursor = CaptureWritePos % MAX_CAPTURE_FRAME_SIZE;
+			CapturesFrames[cursor * 2 + 0] = samples[i * 2 + 0];
+			CapturesFrames[cursor * 2 + 1] = samples[i * 2 + 1];
+			CaptureWritePos += 1;
 		}
 	} else {
 		for (int i = 0; i < (int)frames; i += 1) {
-			CapturesFrames[CapturePos * 2 + 0] = 0;
-			CapturesFrames[CapturePos * 2 + 1] = 0;
-			CapturePos = (CapturePos + 1) % MAX_CAPTURE_FRAME_SIZE;
+			int cursor = CaptureWritePos % MAX_CAPTURE_FRAME_SIZE;
+			CapturesFrames[cursor * 2 + 0] = 0;
+			CapturesFrames[cursor * 2 + 1] = 0;
+			CaptureWritePos += 1;
 		}
 	}
+#endif
 
 	return frames;
 }
 
-static int CaptureRead = 0;
-
 u32 RenderAudio(PL_AudioSpec const *spec, u8 *out, u32 frames, void *data) {
 #if 1
 	return UploadAudioFrames(spec, out, frames, data);
-#else
+#elif 0
+	if (CaptureWritePos < MAX_CAPTURE_FRAME_SIZE) {
+		return 0;
+	}
+
 	float *samples = (float *)out;
 
-	for (int i = 0; i < (int)frames; ++i) {
-		samples[i * 2 + 0] = MapRange(INT16_MIN, INT16_MAX, -1, 1, CapturesFrames[CaptureRead * 2 + 0]);
-		samples[i * 2 + 1] = MapRange(INT16_MIN, INT16_MAX, -1, 1, CapturesFrames[CaptureRead * 2 + 1]);
-		CaptureRead = (CaptureRead + 1) % MAX_CAPTURE_FRAME_SIZE;
+	int i = 0;
+	for (; i < (int)frames; ++i) {
+		samples[i * 2 + 0] = CapturesFrames[CaptureReadPos * 2 + 0];
+		samples[i * 2 + 1] = CapturesFrames[CaptureReadPos * 2 + 1];
+		CaptureReadPos = (CaptureReadPos + 1) % MAX_CAPTURE_FRAME_SIZE;
 	}
 
 	return frames;
+
+#elif 1
+
+	//LogTrace("%u frames\n", frames);
+
+	float *samples = (float *)out;
+
+	int i = 0;
+	for (; i < (int)frames && CaptureReadPos < CaptureWritePos; ++i) {
+		int cursor = CaptureReadPos % MAX_CAPTURE_FRAME_SIZE;
+		samples[i * 2 + 0] = CapturesFrames[cursor * 2 + 0];
+		samples[i * 2 + 1] = CapturesFrames[cursor * 2 + 1];
+		CaptureReadPos += 1;
+	}
+
+	return i;
 #endif
 }
 
 void HandleEvent(PL_Event const *event, void *data) {
 	if (event->Kind == PL_Event_Startup) {
-		PL_ResumeAudioCapture();
 		PL_UpdateAudioRender();
 		PL_ResumeAudioRender();
+		PL_ResumeAudioCapture();
 	} else {
 		PlayerHandleEvent(event, data);
 	}
@@ -971,7 +1014,7 @@ int Main(int argc, char **argv) {
 	//WaveForms[WaveFormCount++] = GenerateSineWave(8192, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(16384, 0.5f);
 
-	//WaveForms[WaveFormCount++] = (WaveForm) { .Frequency = 48000, .Count = MAX_CAPTURE_FRAME_SIZE, .Frames = CapturesFrames };
+	WaveForms[WaveFormCount++] = (WaveForm) { .Frequency = 48000, .Count = MAX_CAPTURE_FRAME_SIZE, .Frames = CapturesFrames };
 
 	for (int i = 1; i < argc; ++i) {
 		const char *path = argv[i];
