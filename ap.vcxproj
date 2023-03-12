@@ -84,6 +84,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Source\Kr\KrMedia.c" />
     <ClCompile Include="Source\Kr\KrMemory.c" />
     <ClCompile Include="Source\Kr\KrPlatform.c" />
     <ClCompile Include="Source\Kr\KrMath.c" />
@@ -94,6 +95,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Resource.h" />
+    <ClInclude Include="Source\KrAudioCnvs.h" />
     <ClInclude Include="Source\Kr\KrMedia.h" />
     <ClInclude Include="Source\Kr\KrMediaInternal.h" />
     <ClInclude Include="Source\Kr\KrPlatform.h" />

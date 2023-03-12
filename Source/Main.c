@@ -155,13 +155,41 @@ static float          AnalysisMagnitudesR[FFT_LENGTH/2 + 1];
 static float          AnalysisFrequenciesL[FFT_LENGTH/2 + 1];
 static float          AnalysisFrequenciesR[FFT_LENGTH/2 + 1];
 
-static float          HanWindow[WINDOW_LENGTH];
+static float          HannWindow[WINDOW_LENGTH];
 
 static bool ApplyTransformation = false;
 
-void InitWindow() {
-	for (int i = 0; i < WindowLength; ++i) {
-		HanWindow[i] = 0.5f * (1.0f - cosf(2 * (float)PI * (float)i / (float)(WindowLength - 1)));
+typedef enum WindowFunction {
+	WindowFunction_Rectangular,
+	WindowFunction_Bartlett,
+	WindowFunction_Hann,
+	WindowFunction_Hamming,
+	WindowFunction_EnumCount
+} WindowFunction;
+
+void InitWindowFunction(float *out, uint count, WindowFunction function) {
+	float N = (float)(count - 1);
+	if (function == WindowFunction_Rectangular) {
+		for (uint i = 0; i < count; ++i) {
+			out[i]  = 1;
+		}
+	} else if (function == WindowFunction_Bartlett) {
+		for (uint i = 0; i < count; ++i) {
+			float n = (float)i;
+			out[i]  = 1 - Abs(2 * n / N - 1);
+		}
+	} else if (function == WindowFunction_Hann) {
+		for (uint i = 0; i < count; ++i) {
+			float n = (float)i;
+			out[i]  = 0.5f * (1.0f - Cos(n / N));
+		}
+	} else if (function == WindowFunction_Hamming) {
+		for (uint i = 0; i < count; ++i) {
+			float n = (float)i;
+			out[i]  = 0.54f - 0.46f * Cos(n / N);
+		}
+	} else {
+		Unreachable();
 	}
 }
 
@@ -216,8 +244,8 @@ void Process(const PL_AudioSpec *spec) {
 	Assert(InputFrameLength >= WindowLength);
 
 	for (int index = 0; index < WindowLength; ++index) {
-		FFTBufferL[index].re = HanWindow[index] * InputFrames[index].Left;
-		FFTBufferR[index].re = HanWindow[index] * InputFrames[index].Right;
+		FFTBufferL[index].re = HannWindow[index] * InputFrames[index].Left;
+		FFTBufferR[index].re = HannWindow[index] * InputFrames[index].Right;
 		FFTBufferL[index].im = 0.0f;
 		FFTBufferR[index].im = 0.0f;
 	}
@@ -387,8 +415,8 @@ void Process(const PL_AudioSpec *spec) {
 	memset(OutputFrames + OutputFrameLength - HopLength, 0, HopLength * sizeof(F32FrameStereo));
 
 	for (int index = 0; index < WindowLength; ++index) {
-		OutputFrames[index].Left += HanWindow[index] * FFTBufferL[index].re;
-		OutputFrames[index].Right += HanWindow[index] * FFTBufferR[index].re;
+		OutputFrames[index].Left += HannWindow[index] * FFTBufferL[index].re;
+		OutputFrames[index].Right += HannWindow[index] * FFTBufferR[index].re;
 	}
 }
 
@@ -872,13 +900,13 @@ WaveForm GenerateSineWave(float freq, float amp) {
 #endif
 
 #define MAX_CAPTURE_FRAME_SIZE (48000*16)
-static i16   CapturesFrames[MAX_CAPTURE_FRAME_SIZE*2];
+static i16  CapturesFrames[MAX_CAPTURE_FRAME_SIZE*2];
 static int   CaptureReadPos;
 static int   CaptureWritePos;
 
 u32 CaptureAudio(PL_AudioSpec const *spec, u8 *in, u32 frames, void *data) {
 	Assert(spec->Format == PL_AudioFormat_R32 && spec->Channels == 2);
-#if 1
+#if 0
 	LogTrace("%u frames\n", frames);
 
 	static int pos = 0;
@@ -894,8 +922,8 @@ u32 CaptureAudio(PL_AudioSpec const *spec, u8 *in, u32 frames, void *data) {
 #elif 1
 	float *samples = (float *)in;
 	for (int i = 0; CaptureWritePos < MAX_CAPTURE_FRAME_SIZE && i < (int)frames; ++i) {
-		CapturesFrames[CaptureWritePos * 2 + 0] = samples[i * 2 + 0];
-		CapturesFrames[CaptureWritePos * 2 + 1] = samples[i * 2 + 1];
+		CapturesFrames[CaptureWritePos * 2 + 0] = (i16)MapRange(-1, 1, INT16_MIN, INT16_MAX, samples[i * 2 + 0]);
+		CapturesFrames[CaptureWritePos * 2 + 1] = (i16)MapRange(-1, 1, INT16_MIN, INT16_MAX, samples[i * 2 + 1]);
 		CaptureWritePos += 1;
 	}
 #elif 0
@@ -921,7 +949,313 @@ u32 CaptureAudio(PL_AudioSpec const *spec, u8 *in, u32 frames, void *data) {
 	return frames;
 }
 
+typedef void(*AudioCnvProc)(struct AudioCnv *, void *, u32, void *, u32, u32 *, u32 *);
+
+typedef struct AudioCnv {
+	AudioCnvProc Proc;
+	PL_AudioSpec Dst;
+	PL_AudioSpec Src;
+} AudioCnv;
+
+#include "KrAudioCnvs.h"
+
+static const AudioCnvProc AudioConverterProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16,
+	}
+};
+
+static const AudioCnvProc AudioConverterMonoProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32_Mono,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32_Mono,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32_Mono,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32_Mono,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32_Mono,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32_Mono,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16_Mono,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16_Mono,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16_Mono,
+	}
+};
+
+static const AudioCnvProc AudioConverterStereoProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32_Stereo,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32_Stereo,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32_Stereo,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32_Stereo,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32_Stereo,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32_Stereo,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16_Stereo,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16_Stereo,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16_Stereo,
+	}
+};
+
+static const AudioCnvProc AudioConverterStereoIncProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32_StereoInc,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32_StereoInc,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32_StereoInc,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32_StereoInc,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32_StereoInc,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32_StereoInc,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16_StereoInc,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16_StereoInc,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16_StereoInc,
+	}
+};
+
+static const AudioCnvProc AudioConverterIncProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32_Inc,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32_Inc,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32_Inc,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32_Inc,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32_Inc,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32_Inc,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16_Inc,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16_Inc,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16_Inc,
+	}
+};
+
+static const AudioCnvProc AudioConverterDecProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32_Dec,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32_Dec,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32_Dec,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32_Dec,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32_Dec,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32_Dec,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16_Dec,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16_Dec,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16_Dec,
+	}
+};
+
+static const AudioCnvProc AudioConverterResampleProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32_Resample,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32_Resample,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16_Resample,
+	}
+};
+
+static const AudioCnvProc AudioConverterMonoResampleProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32_Mono_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32_Mono_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32_Mono_Resample,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32_Mono_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32_Mono_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32_Mono_Resample,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16_Mono_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16_Mono_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16_Mono_Resample,
+	}
+};
+
+static const AudioCnvProc AudioConverterStereoResampleProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32_Stereo_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32_Stereo_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32_Stereo_Resample,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32_Stereo_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32_Stereo_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32_Stereo_Resample,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16_Stereo_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16_Stereo_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16_Stereo_Resample,
+	}
+};
+
+static const AudioCnvProc AudioConverterStereoIncResampleProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32_StereoInc_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32_StereoInc_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32_StereoInc_Resample,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32_StereoInc_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32_StereoInc_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32_StereoInc_Resample,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16_StereoInc_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16_StereoInc_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16_StereoInc_Resample,
+	}
+};
+
+static const AudioCnvProc AudioConverterIncResampleProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32_Inc_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32_Inc_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32_Inc_Resample,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32_Inc_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32_Inc_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32_Inc_Resample,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16_Inc_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16_Inc_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16_Inc_Resample,
+	}
+};
+
+static const AudioCnvProc AudioConverterDecResampleProcs[][PL_AudioFormat_EnumCount] = {
+	[PL_AudioFormat_R32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToR32_Dec_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToR32_Dec_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToR32_Dec_Resample,
+	},
+	[PL_AudioFormat_I32] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI32_Dec_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI32_Dec_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI32_Dec_Resample,
+	},
+	[PL_AudioFormat_I16] = {
+		[PL_AudioFormat_R32] = AudioCnvR32ToI16_Dec_Resample,
+		[PL_AudioFormat_I32] = AudioCnvI32ToI16_Dec_Resample,
+		[PL_AudioFormat_I16] = AudioCnvI16ToI16_Dec_Resample,
+	}
+};
+
+void AudioCnvInit(AudioCnv *cnv, PL_AudioSpec const *dst, PL_AudioSpec const *src) {
+	cnv->Proc = nullptr;
+	cnv->Dst  = *dst;
+	cnv->Src  = *src;
+
+	if (cnv->Dst.Frequency == cnv->Src.Frequency) {
+		if (cnv->Dst.Channels == cnv->Src.Channels) {
+			cnv->Proc = AudioConverterProcs[cnv->Dst.Format][cnv->Src.Format];
+		} else if (cnv->Dst.Channels == 1) {
+			cnv->Proc = AudioConverterMonoProcs[cnv->Dst.Format][cnv->Src.Format];
+		} else if (cnv->Src.Channels == 1 && cnv->Dst.Channels == 2) {
+			cnv->Proc = AudioConverterStereoProcs[cnv->Dst.Format][cnv->Src.Format];
+		} else if (cnv->Src.Channels == 1) {
+			cnv->Proc = AudioConverterStereoIncProcs[cnv->Dst.Format][cnv->Src.Format];
+		} else if (cnv->Dst.Channels > cnv->Src.Channels) {
+			cnv->Proc = AudioConverterIncProcs[cnv->Dst.Format][cnv->Src.Format];
+		} else {
+			cnv->Proc = AudioConverterDecProcs[cnv->Dst.Format][cnv->Src.Format];
+		}
+	} else {
+		if (cnv->Dst.Channels == cnv->Src.Channels) {
+			cnv->Proc = AudioConverterResampleProcs[cnv->Dst.Format][cnv->Src.Format];
+		} else if (cnv->Dst.Channels == 1) {
+			cnv->Proc = AudioConverterMonoResampleProcs[cnv->Dst.Format][cnv->Src.Format];
+		} else if (cnv->Src.Channels == 1 && cnv->Dst.Channels == 2) {
+			cnv->Proc = AudioConverterStereoResampleProcs[cnv->Dst.Format][cnv->Src.Format];
+		} else if (cnv->Src.Channels == 1) {
+			cnv->Proc = AudioConverterStereoIncResampleProcs[cnv->Dst.Format][cnv->Src.Format];
+		} else if (cnv->Dst.Channels > cnv->Src.Channels) {
+			cnv->Proc = AudioConverterIncResampleProcs[cnv->Dst.Format][cnv->Src.Format];
+		} else {
+			cnv->Proc = AudioConverterDecResampleProcs[cnv->Dst.Format][cnv->Src.Format];
+		}
+	}
+}
+
+void AudioConvert(AudioCnv *cnv, void *dst, u32 dst_frames, void *src, u32 src_frames, u32 *read, u32 *written) {
+	cnv->Proc(cnv, dst, dst_frames, src, src_frames, read, written);
+}
+
+typedef struct AudioBuffer {
+	struct AudioBuffer *Next;
+	uint                Pos;
+	uint                Cap;
+	float               Data[8192];
+} AudioBuffer;
+
+typedef struct AudioMixer {
+	AudioCnv     Cnv;
+	AudioBuffer *Output;
+} AudioMixer;
+
+u32 AudioMixerRead(AudioMixer *mixer, PL_AudioSpec const *spec, u8 *out, u32 frames) {
+	if (memcmp(spec, &mixer->Cnv.Dst, sizeof(*spec))) {
+		AudioCnvInit(&mixer->Cnv, spec, &mixer->Cnv.Src);
+	}
+
+	u32 total_written = 0;
+
+	u32 read, written;
+	for (AudioBuffer *input = mixer->Output; input && frames; ) {
+		// @Todo: convert to bytes
+		AudioConvert(&mixer->Cnv, out, frames, input->Data + input->Pos, input->Cap - input->Pos, &read, &written);
+		input->Pos += read;
+		if (input->Pos == input->Cap) {
+			// @Todo: things!!!!
+			mixer->Output = input->Next;
+		}
+		frames -= read;
+		out += read;
+		total_written += written;
+	}
+
+	return total_written;
+}
+
 u32 RenderAudio(PL_AudioSpec const *spec, u8 *out, u32 frames, void *data) {
+	//AudioMixer *mixer = (AudioMixer *)data;
+	//u32 written = AudioMixerRead(mixer, spec, out, frames);
+	//return written;
+
 #if 1
 	return UploadAudioFrames(spec, out, frames, data);
 #elif 0
@@ -940,7 +1274,7 @@ u32 RenderAudio(PL_AudioSpec const *spec, u8 *out, u32 frames, void *data) {
 
 	return frames;
 
-#elif 1
+#elif 0
 
 	//LogTrace("%u frames\n", frames);
 
@@ -991,7 +1325,7 @@ void UpdateFrame(PL_IoDevice const *io, void *data) {
 }
 
 int Main(int argc, char **argv) {
-	InitWindow();
+	InitWindowFunction(HannWindow, WindowLength, WindowFunction_Hann);
 
 	int cap_waveforms = argc * 100;
 
@@ -1014,7 +1348,7 @@ int Main(int argc, char **argv) {
 	//WaveForms[WaveFormCount++] = GenerateSineWave(8192, 0.5f);
 	//WaveForms[WaveFormCount++] = GenerateSineWave(16384, 0.5f);
 
-	WaveForms[WaveFormCount++] = (WaveForm) { .Frequency = 48000, .Count = MAX_CAPTURE_FRAME_SIZE, .Frames = CapturesFrames };
+	//WaveForms[WaveFormCount++] = (WaveForm) { .Frequency = 48000, .Count = MAX_CAPTURE_FRAME_SIZE, .Frames = CapturesFrames };
 
 	for (int i = 1; i < argc; ++i) {
 		const char *path = argv[i];
@@ -1034,7 +1368,7 @@ int Main(int argc, char **argv) {
 		.Features = PL_Feature_Window | PL_Feature_Audio,
 		.Window   = { .Title = "Audio Processing" },
 		.Flags    = PL_Flag_ToggleFullscreenF11 | PL_Flag_ExitAltF4,
-		.Audio    = { .Render = 1, .Capture = 1 },
+		.Audio    = { .Render = 1, .Capture = 0 },
 		.User     = {
 			.OnEvent        = HandleEvent,
 			.OnUpdate       = UpdateFrame,

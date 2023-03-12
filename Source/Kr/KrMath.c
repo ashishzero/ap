@@ -2482,8 +2482,8 @@ void ForwardFFT(Complex *data, uint count) {
 
 	// radix = 2
 	for (uint index = 0; index < count; index += 2) {
-		Complex p    = data[index + 0];
-		Complex q    = data[index + 1];
+		Complex p       = data[index + 0];
+		Complex q       = data[index + 1];
 		data[index + 0] = V2fAdd(p, q);
 		data[index + 1] = V2fSub(p, q);
 	}
@@ -2509,11 +2509,11 @@ void ForwardFFT(Complex *data, uint count) {
 		Complex w  = ComplexRect(1.0f, 0.0f);
 		for (uint block = 0; block < step; ++block) {
 			for (uint index = block; index < count; index += jump) {
-				uint next = index + step;
-				Complex a = data[index];
-				Complex b = ComplexMul(w, data[next]);
-				data[index]  = V2fAdd(a, b);
-				data[next]   = V2fSub(a, b);
+				uint next   = index + step;
+				Complex a   = data[index];
+				Complex b   = ComplexMul(w, data[next]);
+				data[index] = V2fAdd(a, b);
+				data[next]  = V2fSub(a, b);
 			}
 			w = ComplexMul(w, tw);
 		}
@@ -2525,8 +2525,8 @@ void ReverseFFT(Complex *data, uint count) {
 
 	// radix = 2
 	for (uint index = 0; index < count; index += 2) {
-		Complex p    = data[index + 0];
-		Complex q    = data[index + 1];
+		Complex p       = data[index + 0];
+		Complex q       = data[index + 1];
 		data[index + 0] = V2fAdd(p, q);
 		data[index + 1] = V2fSub(p, q);
 	}
@@ -2555,8 +2555,8 @@ void ReverseFFT(Complex *data, uint count) {
 				uint next   = index + step;
 				Complex a   = data[index];
 				Complex b   = ComplexMul(w, data[next]);
-				data[index]    = V2fAdd(a, b);
-				data[next]     = V2fSub(a, b);
+				data[index] = V2fAdd(a, b);
+				data[next]  = V2fSub(a, b);
 			}
 			w = ComplexMul(w, tw);
 		}
