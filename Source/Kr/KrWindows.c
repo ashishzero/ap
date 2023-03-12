@@ -205,6 +205,7 @@ typedef struct PL_Audio {
 	PL_AudioDeviceNative   FirstDevice;
 	IMMDeviceEnumerator  * DeviceEnumerator;
 	PL_AudioEndpoint       Endpoints[PL_AudioEndpoint_EnumCount];
+	DWORD                  ParentThreadId;
 } PL_Audio;
 
 static PL_Window             Window;
@@ -651,64 +652,6 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			SetWindowPos(wnd, 0, left, top, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
 		} break;
 
-		case PL_WM_AUDIO_DEVICE_ACTIVATED: {
-			PL_AudioDeviceNative *native  = (PL_AudioDeviceNative *)wparam;
-			PL_AudioEndpointKind endpoint = native->IsCapture ? PL_AudioEndpoint_Capture : PL_AudioEndpoint_Render;
-			event.Kind                    = PL_Event_AudioDeviceActived;
-			event.Audio.Endpoint          = endpoint;
-			event.Audio.NativeHandle      = native;
-			event.Audio.Name              = native->Name;
-			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
-			PL_ActivateAudioDevice(native);
-		} break;
-
-		case PL_WM_AUDIO_DEVICE_DEACTIVATED: {
-			PL_AudioDeviceNative *native  = (PL_AudioDeviceNative *)wparam;
-			PL_AudioEndpointKind endpoint = native->IsCapture ? PL_AudioEndpoint_Capture : PL_AudioEndpoint_Render;
-			event.Kind                    = PL_Event_AudioDeviceDeactived;
-			event.Audio.Endpoint          = endpoint;
-			event.Audio.NativeHandle      = native;
-			event.Audio.Name              = native->Name;
-			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
-			PL_DeactivateAudioDevice(native);
-		} break;
-
-		case PL_WM_AUDIO_PAUSED: {
-			event.Kind               = PL_Event_AudioPaused;
-			event.Audio.Endpoint     = (PL_AudioEndpointKind)wparam;
-			event.Audio.NativeHandle = 0;
-			event.Audio.Name         = nullptr;
-			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
-		} break;
-
-		case PL_WM_AUDIO_RESUMED: {
-			event.Kind               = PL_Event_AudioResumed;
-			event.Audio.Endpoint     = (PL_AudioEndpointKind)wparam;
-			event.Audio.NativeHandle = 0;
-			event.Audio.Name         = nullptr;
-			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
-		} break;
-
-		case PL_WM_AUDIO_DEVICE_LOST: {
-			event.Kind               = PL_Event_AudioDeviceLost;
-			event.Audio.Endpoint     = (PL_AudioEndpointKind)wparam;
-			event.Audio.NativeHandle = 0;
-			event.Audio.Name         = nullptr;
-			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
-			PL_UnsetCurrentAudioDevice(event.Audio.Endpoint);
-		} break;
-
-		case PL_WM_AUDIO_DEVICE_CHANGED: {
-			PL_AudioDeviceNative *native  = (PL_AudioDeviceNative *)wparam;
-			PL_AudioEndpointKind endpoint = native->IsCapture ? PL_AudioEndpoint_Capture : PL_AudioEndpoint_Render;
-			event.Kind                    = PL_Event_AudioDeviceChanged;
-			event.Audio.Endpoint          = endpoint;
-			event.Audio.NativeHandle      = native;
-			event.Audio.Name              = native->Name;
-			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
-			PL_SetCurrentAudioDevice(native);
-		} break;
-
 		default: {
 			res = DefWindowProcW(wnd, msg, wparam, lparam);
 		} break;
@@ -930,12 +873,12 @@ HRESULT STDMETHODCALLTYPE PL_OnDeviceStateChanged(IMMNotificationClient *this_, 
 
 		if (changed) {
 			UINT msg = active ? PL_WM_AUDIO_DEVICE_ACTIVATED : PL_WM_AUDIO_DEVICE_DEACTIVATED;
-			PostMessageW(Window.Handle, msg, (WPARAM)native, 0);
+			PostThreadMessageW(Audio.ParentThreadId, msg, (WPARAM)native, 0);
 		}
 	} else {
 		native = PL_AddAudioDeviceNativeFromId(device_id);
 		UINT msg = active ? PL_WM_AUDIO_DEVICE_ACTIVATED : PL_WM_AUDIO_DEVICE_DEACTIVATED;
-		PostMessageW(Window.Handle, msg, (WPARAM)native, 0);
+		PostThreadMessageW(Audio.ParentThreadId, msg, (WPARAM)native, 0);
 	}
 
 	PL_AtomicUnlock(&Audio.Lock);
@@ -970,7 +913,7 @@ HRESULT STDMETHODCALLTYPE PL_OnDefaultDeviceChanged(IMMNotificationClient *this_
 
 	if (!device_id) {
 		// No device for the endpoint
-		PostMessageW(Window.Handle, PL_WM_AUDIO_DEVICE_LOST, kind, 0);
+		PostThreadMessageW(Audio.ParentThreadId, PL_WM_AUDIO_DEVICE_LOST, kind, 0);
 		return S_OK;
 	}
 
@@ -1057,7 +1000,7 @@ static void PL_Media_EnumerateAudioDevices(void) {
 		if (SUCCEEDED(hr)) {
 			PL_AudioDeviceNative *native = PL_AddAudioDeviceNative(immdevice);
 			if (native->IsActive) {
-				PostMessageW(Window.Handle, PL_WM_AUDIO_DEVICE_ACTIVATED, (WPARAM)native, 0);
+				PostThreadMessageW(Audio.ParentThreadId, PL_WM_AUDIO_DEVICE_ACTIVATED, (WPARAM)native, 0);
 			}
 			CoTaskMemFree(id);
 			id = nullptr;
@@ -1264,7 +1207,7 @@ static bool PL_AudioEndpoint_TryLoadDevice(PL_AudioEndpointKind kind, PL_AudioDe
 	InterlockedExchangePointer(&endpoint->EffectiveDevice, native);
 	InterlockedExchange(&endpoint->DeviceLost, 0);
 
-	PostMessageW(Window.Handle, PL_WM_AUDIO_DEVICE_CHANGED, (WPARAM)endpoint->EffectiveDevice, 0);
+	PostThreadMessageW(Audio.ParentThreadId, PL_WM_AUDIO_DEVICE_CHANGED, (WPARAM)endpoint->EffectiveDevice, 0);
 
 	if (kind == PL_AudioEndpoint_Render) {
 		PL_AudioEndpoint_RenderFrames();
@@ -1276,7 +1219,7 @@ static bool PL_AudioEndpoint_TryLoadDevice(PL_AudioEndpointKind kind, PL_AudioDe
 		IAudioClient *client = endpoint->Client;
 		HRESULT hr = client->lpVtbl->Start(client);
 		if (SUCCEEDED(hr) || hr == AUDCLNT_E_NOT_STOPPED) {
-			PostMessageW(Window.Handle, PL_WM_AUDIO_RESUMED, kind, 0);
+			PostThreadMessageW(Audio.ParentThreadId, PL_WM_AUDIO_RESUMED, kind, 0);
 		} else {
 			InterlockedExchange(&endpoint->DeviceLost, 1);
 			goto failed;
@@ -1303,10 +1246,10 @@ static void PL_AudioEndpoint_RestartDevice(PL_AudioEndpointKind kind) {
 		if (native) {
 			if (!PL_AudioEndpoint_TryLoadDevice(kind, nullptr)) {
 				PL_AudioEndpoint_ReleaseDevice(kind);
-				PostMessageW(Window.Handle, PL_WM_AUDIO_DEVICE_LOST, kind, 0);
+				PostThreadMessageW(Audio.ParentThreadId, PL_WM_AUDIO_DEVICE_LOST, kind, 0);
 			}
 		} else {
-			PostMessageW(Window.Handle, PL_WM_AUDIO_DEVICE_LOST, kind, 0);
+			PostThreadMessageW(Audio.ParentThreadId, PL_WM_AUDIO_DEVICE_LOST, kind, 0);
 		}
 	}
 }
@@ -1341,7 +1284,7 @@ static DWORD WINAPI PL_AudioThread(LPVOID param) {
 			if (!endpoint->DeviceLost) {
 				hr = endpoint->Client->lpVtbl->Start(endpoint->Client);
 				if (SUCCEEDED(hr) || hr == AUDCLNT_E_NOT_STOPPED) {
-					PostMessageW(Window.Handle, PL_WM_AUDIO_RESUMED, PL_AudioEndpoint_Render, 0);
+					PostThreadMessageW(Audio.ParentThreadId, PL_WM_AUDIO_RESUMED, PL_AudioEndpoint_Render, 0);
 				} else {
 					InterlockedExchange(&endpoint->DeviceLost, 1);
 				}
@@ -1351,7 +1294,9 @@ static DWORD WINAPI PL_AudioThread(LPVOID param) {
 			if (!endpoint->DeviceLost) {
 				hr = endpoint->Client->lpVtbl->Stop(endpoint->Client);
 				if (SUCCEEDED(hr)) {
-					PostMessageW(Window.Handle, PL_WM_AUDIO_PAUSED, PL_AudioEndpoint_Render, 0);
+					if (!PostThreadMessageW(Audio.ParentThreadId, PL_WM_AUDIO_PAUSED, PL_AudioEndpoint_Render, 0)) {
+						TriggerBreakpoint();
+					}
 				} else {
 					InterlockedExchange(&endpoint->DeviceLost, 1);
 				}
@@ -1474,6 +1419,11 @@ static bool PL_AudioEndpoint_Init(PL_AudioEndpointKind kind) {
 }
 
 static void PL_Media_Audio_InitVTable(void) {
+	MSG msg;
+	PeekMessageW(&msg, NULL, WM_USER, WM_USER, PM_NOREMOVE);
+
+	Audio.ParentThreadId = GetCurrentThreadId();
+
 	Media.IoDevice.AudioRenderDevices.Data  = Media.AudioDeviceBuffer[PL_AudioEndpoint_Render].Data;
 	Media.IoDevice.AudioCaptureDevices.Data = Media.AudioDeviceBuffer[PL_AudioEndpoint_Capture].Data;
 
@@ -1558,6 +1508,69 @@ static void PL_Media_Release(void) {
 	memset(&Media, 0, sizeof(Media));
 }
 
+static void HandleThreadMessage(MSG *msg) {
+	PL_Event event;
+	switch (msg->message) {
+		case PL_WM_AUDIO_DEVICE_ACTIVATED: {
+			PL_AudioDeviceNative *native  = (PL_AudioDeviceNative *)msg->wParam;
+			PL_AudioEndpointKind endpoint = native->IsCapture ? PL_AudioEndpoint_Capture : PL_AudioEndpoint_Render;
+			event.Kind                    = PL_Event_AudioDeviceActived;
+			event.Audio.Endpoint          = endpoint;
+			event.Audio.NativeHandle      = native;
+			event.Audio.Name              = native->Name;
+			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
+			PL_ActivateAudioDevice(native);
+		} break;
+
+		case PL_WM_AUDIO_DEVICE_DEACTIVATED: {
+			PL_AudioDeviceNative *native  = (PL_AudioDeviceNative *)msg->wParam;
+			PL_AudioEndpointKind endpoint = native->IsCapture ? PL_AudioEndpoint_Capture : PL_AudioEndpoint_Render;
+			event.Kind                    = PL_Event_AudioDeviceDeactived;
+			event.Audio.Endpoint          = endpoint;
+			event.Audio.NativeHandle      = native;
+			event.Audio.Name              = native->Name;
+			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
+			PL_DeactivateAudioDevice(native);
+		} break;
+
+		case PL_WM_AUDIO_PAUSED: {
+			event.Kind               = PL_Event_AudioPaused;
+			event.Audio.Endpoint     = (PL_AudioEndpointKind)msg->wParam;
+			event.Audio.NativeHandle = 0;
+			event.Audio.Name         = nullptr;
+			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
+		} break;
+
+		case PL_WM_AUDIO_RESUMED: {
+			event.Kind               = PL_Event_AudioResumed;
+			event.Audio.Endpoint     = (PL_AudioEndpointKind)msg->wParam;
+			event.Audio.NativeHandle = 0;
+			event.Audio.Name         = nullptr;
+			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
+		} break;
+
+		case PL_WM_AUDIO_DEVICE_LOST: {
+			event.Kind               = PL_Event_AudioDeviceLost;
+			event.Audio.Endpoint     = (PL_AudioEndpointKind)msg->wParam;
+			event.Audio.NativeHandle = 0;
+			event.Audio.Name         = nullptr;
+			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
+			PL_UnsetCurrentAudioDevice(event.Audio.Endpoint);
+		} break;
+
+		case PL_WM_AUDIO_DEVICE_CHANGED: {
+			PL_AudioDeviceNative *native  = (PL_AudioDeviceNative *)msg->wParam;
+			PL_AudioEndpointKind endpoint = native->IsCapture ? PL_AudioEndpoint_Capture : PL_AudioEndpoint_Render;
+			event.Kind                    = PL_Event_AudioDeviceChanged;
+			event.Audio.Endpoint          = endpoint;
+			event.Audio.NativeHandle      = native;
+			event.Audio.Name              = native->Name;
+			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
+			PL_SetCurrentAudioDevice(native);
+		} break;
+	}
+}
+
 static int PL_MessageLoop(void) {
 	Media.UserVTable.OnEvent(&(PL_Event){ .Kind = PL_Event_Startup }, Media.UserVTable.Data);
 
@@ -1585,6 +1598,8 @@ static int PL_MessageLoop(void) {
 			if (msg.message == WM_QUIT) {
 				return 0;
 			}
+			
+			HandleThreadMessage(&msg);
 			TranslateMessage(&msg);
 			DispatchMessageW(&msg);
 		}
