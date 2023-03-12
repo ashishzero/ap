@@ -90,7 +90,8 @@
     <ClCompile Include="Source\Kr\KrMath.c" />
     <ClCompile Include="Source\Kr\KrRandom.c" />
     <ClCompile Include="Source\Kr\KrTwiddleFactors.c" />
-    <ClCompile Include="Source\Kr\KrWindows.c" />
+    <ClCompile Include="Source\Kr\Windows\KrWindows.c" />
+    <ClCompile Include="Source\Kr\Windows\KrWindowsCore.c" />
     <ClCompile Include="Source\Main.c" />
   </ItemGroup>
   <ItemGroup>
@@ -102,6 +103,7 @@
     <ClInclude Include="Source\Kr\KrMath.h" />
     <ClInclude Include="Source\Kr\KrRandom.h" />
     <ClInclude Include="Source\Kr\KrMemory.h" />
+    <ClInclude Include="Source\Kr\Windows\KrWindowsCore.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="KrResource.rc" />

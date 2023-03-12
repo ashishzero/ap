@@ -30,13 +30,16 @@
     <ClCompile Include="Source\Kr\KrTwiddleFactors.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Source\Kr\KrWindows.c">
+    <ClCompile Include="Source\Kr\Windows\KrWindows.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Source\Kr\KrMemory.c">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Source\Kr\KrMedia.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Kr\Windows\KrWindowsCore.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
@@ -63,6 +66,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Source\KrAudioCnvs.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Kr\Windows\KrWindowsCore.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
