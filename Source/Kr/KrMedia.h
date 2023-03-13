@@ -36,12 +36,14 @@ typedef enum PL_AudioEndpointKind {
 
 typedef enum PL_EventKind {
 	PL_Event_Startup,
-	PL_Event_Quit,
+	PL_Event_Terminate,
+
 	PL_Event_WindowCreated,
 	PL_Event_WindowDestroyed,
 	PL_Event_WindowActivated,
 	PL_Event_WindowDeactivated,
 	PL_Event_WindowResized,
+	PL_Event_WindowClosed,
 
 	PL_Event_MouseMoved,
 	PL_Event_ButtonPressed,
@@ -65,7 +67,10 @@ typedef enum PL_EventKind {
 	PL_Event_EnumCount
 }  PL_EventKind;
 
+typedef struct PL_Window PL_Window;
+
 typedef struct PL_WindowEvent {
+	PL_Window *Target;
 	i32 Width, Height;
 } PL_WindowEvent;
 
@@ -137,37 +142,6 @@ typedef struct PL_UserVTable {
 	PL_AudioCaptureProc OnAudioCapture;
 } PL_UserVTable;
 
-typedef enum PL_FeatureBit {
-	PL_Feature_Window     = 0x1,
-	PL_Feature_Audio      = 0x2,
-	PL_Feature_Everything = 0xff
-} PL_FeatureBit;
-
-typedef enum PL_FlagBit {
-	PL_Flag_ExitEscape          = 0x1,
-	PL_Flag_ExitAltF4           = 0x2,
-	PL_Flag_ToggleFullscreenF11 = 0x4,
-} PL_FlagBit;
-
-typedef struct PL_WindowConfig {
-	char Title[2048];
-	uint Width;
-	uint Height;
-	bool Fullscreen;
-} PL_WindowConfig;
-
-typedef struct PL_AudioConfig {
-	bool Render, Capture;
-} PL_AudioConfig;
-
-typedef struct PL_Config {
-	u32                  Features;
-	u32                  Flags;
-	PL_WindowConfig      Window;
-	PL_AudioConfig       Audio;
-	PL_UserVTable        User;
-} PL_Config;
-
 typedef struct PL_KeyState {
 	u8 Down;
 	u8 Pressed;
@@ -226,7 +200,20 @@ i32             PL_AtomicExg(volatile i32 *dst, i32 val);
 void            PL_AtomicLock(volatile i32 *lock);
 void            PL_AtomicUnlock(volatile i32 *lock);
 
-void            PL_SetConfig(PL_Config const *config);
+void            PL_InitAudio(bool render, bool capture);
+void            PL_ReleaseAudioRender(void);
+void            PL_ReleaseAudioCapture(void);
+void            PL_ReleaseAudio(void);
+
+void            PL_CreateWindow(const char *title, uint w, uint h, bool fullscreen);
+void            PL_DestroyWindow(void);
+
+void            PL_Terminate(int code);
+void            PL_PostTerminateMessage(void);
+
+PL_UserVTable   PL_GetUserVTable(void);
+void            PL_SetUserVTable(PL_UserVTable vtbl);
+
 bool            PL_IsFullscreen(void);
 void            PL_ToggleFullscreen(void);
 bool            PL_IsAudioRendering(void);

@@ -1,4 +1,4 @@
-#include "KrWindowsCore.h"
+#include "KrMain.h"
 
 #pragma warning(push)
 #pragma warning(disable: 5105)
@@ -41,6 +41,18 @@ void PL_AtomicLock(volatile i32 *lock) {
 
 void PL_AtomicUnlock(volatile i32 *lock) {
 	InterlockedExchange(lock, 0);
+}
+
+//
+// Public API
+//
+
+void PL_Terminate(int code) {
+	ExitProcess((UINT)code);
+}
+
+void PL_PostTerminateMessage(void) {
+	PostQuitMessage(0);
 }
 
 //
@@ -209,7 +221,7 @@ static void PL_SetCurrentAudioDevice(PL_AudioDeviceNative *effective, PL_AudioDe
 	devices->Default = desired == nullptr;
 }
 
-static void HandleThreadMessage(MSG *msg) {
+static void DispatchThreadMessage(MSG *msg) {
 	PL_Event event;
 	switch (msg->message) {
 		case PL_WM_AUDIO_DEVICE_ACTIVATED: {
@@ -303,7 +315,7 @@ static int PL_MessageLoop(void) {
 			if (msg.message == WM_QUIT) {
 				return 0;
 			}
-			HandleThreadMessage(&msg);
+			DispatchThreadMessage(&msg);
 			TranslateMessage(&msg);
 			DispatchMessageW(&msg);
 		}
@@ -311,7 +323,7 @@ static int PL_MessageLoop(void) {
 		Media.UserVTable.OnUpdate(&Media.IoDevice, Media.UserVTable.Data);
 	}
 
-	event = (PL_Event){ .Kind = PL_Event_Quit };
+	event = (PL_Event){ .Kind = PL_Event_Terminate };
 	Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
 
 	return 0;
@@ -342,10 +354,6 @@ static char **PL_CommandLineArguments(int *argc) {
 	return nullptr;
 }
 
-// TODO: cleanup
-extern void PL_Media_Load();
-extern void PL_Media_Release();
-
 static int PL_Main(void) {
 	if (IsWindows10OrGreater()) {
 		SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -375,9 +383,7 @@ static int PL_Main(void) {
 	int res = Main(argc, argv);
 
 	if (res == 0) {
-		PL_Media_Load();
 		res = PL_MessageLoop();
-		PL_Media_Release();
 	}
 
 	CoUninitialize();

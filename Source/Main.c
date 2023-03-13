@@ -1300,6 +1300,10 @@ void HandleEvent(PL_Event const *event, void *data) {
 	} else {
 		PlayerHandleEvent(event, data);
 	}
+
+	if (event->Kind == PL_Event_WindowClosed) {
+		PL_PostTerminateMessage();
+	}
 }
 
 void UpdateFrame(PL_IoDevice const *io, void *data) {
@@ -1364,24 +1368,15 @@ int Main(int argc, char **argv) {
 
 	ResetWaveform();
 
-	PL_Config config = {
-		.Features = PL_Feature_Window | PL_Feature_Audio,
-		.Window   = { .Title = "Audio Processing" },
-		.Flags    = PL_Flag_ToggleFullscreenF11 | PL_Flag_ExitAltF4,
-		.Audio    = { .Render = 1, .Capture = 0 },
-		.User     = {
-			.OnEvent        = HandleEvent,
-			.OnUpdate       = UpdateFrame,
-			.OnAudioRender  = RenderAudio,
-			.OnAudioCapture = CaptureAudio
-		},
-	};
+	PL_SetUserVTable((PL_UserVTable){
+		.OnEvent        = HandleEvent,
+		.OnUpdate       = UpdateFrame,
+		.OnAudioRender  = RenderAudio,
+		.OnAudioCapture = CaptureAudio
+	});
 
-#ifdef M_BUILD_DEBUG
-	config.Flags |= PL_Flag_ExitEscape;
-#endif
-
-	PL_SetConfig(&config);
+	PL_InitAudio(1, 0);
+	PL_CreateWindow("Audio Processing", 0, 0, 0);
 
 	return 0;
 }

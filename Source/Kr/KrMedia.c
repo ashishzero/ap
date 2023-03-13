@@ -1,17 +1,17 @@
 #include "KrMediaInternal.h"
 
-static bool PL_Media_Fallback_IsFullscreen()                               { return false; }
-static void PL_Media_Fallback_ToggleFullscreen()                           { }
-static bool PL_Media_Fallback_IsAudioRendering()                           { return false; }
-static void PL_Media_Fallback_UpdateAudioRender()                          {}
-static void PL_Media_Fallback_PauseAudioRender()                           {}
-static void PL_Media_Fallback_ResumeAudioRender()                          {}
-static void PL_Media_Fallback_ResetAudioRender()                           {}
-static bool PL_Media_Fallback_IsAudioCapturing()                           { return false; }
-static void PL_Media_Fallback_PauseAudioCapture()                          {}
-static void PL_Media_Fallback_ResumeAudioCapture()                         {}
-static void PL_Media_Fallback_ResetAudioCapture()                          {}
-static void PL_Media_Fallback_SetAudioDevice(PL_AudioDevice const *device) {}
+bool PL_Media_Fallback_IsFullscreen()                               { return false; }
+void PL_Media_Fallback_ToggleFullscreen()                           { }
+bool PL_Media_Fallback_IsAudioRendering()                           { return false; }
+void PL_Media_Fallback_UpdateAudioRender()                          {}
+void PL_Media_Fallback_PauseAudioRender()                           {}
+void PL_Media_Fallback_ResumeAudioRender()                          {}
+void PL_Media_Fallback_ResetAudioRender()                           {}
+bool PL_Media_Fallback_IsAudioCapturing()                           { return false; }
+void PL_Media_Fallback_PauseAudioCapture()                          {}
+void PL_Media_Fallback_ResumeAudioCapture()                         {}
+void PL_Media_Fallback_ResetAudioCapture()                          {}
+void PL_Media_Fallback_SetAudioDevice(PL_AudioDevice const *device) {}
 
 static void PL_User_Fallback_OnEvent(PL_Event const *event, void *data)                               {}
 static void PL_User_Fallback_OnUpdate(PL_IoDevice const *io, void *data)                              {}
@@ -41,17 +41,17 @@ PL_Media Media = {
 	}
 };
 
-void PL_SetConfig(PL_Config const *config) {
-	Media.Config = *config;
+PL_UserVTable PL_GetUserVTable(void) {
+	return Media.UserVTable;
+}
 
-	if (!Media.Config.User.OnEvent)
-		Media.Config.User.OnEvent = PL_User_Fallback_OnEvent;
+void PL_SetUserVTable(PL_UserVTable vtbl) {
+	Media.UserVTable.Data = vtbl.Data;
 
-	if (!Media.Config.User.OnUpdate)
-		Media.Config.User.OnUpdate = PL_User_Fallback_OnUpdate;
-
-	if (!Media.Config.User.OnAudioRender)
-		Media.Config.User.OnAudioRender = PL_User_Fallback_OnAudioRender;
+	Media.UserVTable.OnEvent        = vtbl.OnEvent  ? vtbl.OnEvent  : PL_User_Fallback_OnEvent;
+	Media.UserVTable.OnUpdate       = vtbl.OnUpdate ? vtbl.OnUpdate : PL_User_Fallback_OnUpdate;
+	Media.UserVTable.OnAudioRender  = vtbl.OnAudioRender  ? vtbl.OnAudioRender  : PL_User_Fallback_OnAudioRender;
+	Media.UserVTable.OnAudioCapture = vtbl.OnAudioCapture ? vtbl.OnAudioCapture : PL_User_Fallback_OnAudioCapture;
 }
 
 bool PL_IsFullscreen(void) {
