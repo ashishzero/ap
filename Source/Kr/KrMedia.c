@@ -1,7 +1,7 @@
 #include "KrMediaInternal.h"
 
-bool PL_Media_Fallback_IsFullscreen()                               { return false; }
-void PL_Media_Fallback_ToggleFullscreen()                           { }
+bool PL_Media_Fallback_IsFullscreen(PL_Window *window)              { return false; }
+void PL_Media_Fallback_ToggleFullscreen(PL_Window *window)          { }
 bool PL_Media_Fallback_IsAudioRendering()                           { return false; }
 void PL_Media_Fallback_UpdateAudioRender()                          {}
 void PL_Media_Fallback_PauseAudioRender()                           {}
@@ -54,12 +54,12 @@ void PL_SetUserVTable(PL_UserVTable vtbl) {
 	Media.UserVTable.OnAudioCapture = vtbl.OnAudioCapture ? vtbl.OnAudioCapture : PL_User_Fallback_OnAudioCapture;
 }
 
-bool PL_IsFullscreen(void) {
-	return Media.VTable.IsFullscreen();
+bool PL_IsFullscreen(PL_Window *window) {
+	return Media.VTable.IsFullscreen(window);
 }
 
-void PL_ToggleFullscreen(void) {
-	Media.VTable.ToggleFullscreen();
+void PL_ToggleFullscreen(PL_Window *window) {
+	Media.VTable.ToggleFullscreen(window);
 }
 
 bool PL_IsAudioRendering(void) {

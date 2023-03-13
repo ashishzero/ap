@@ -70,7 +70,6 @@ typedef enum PL_EventKind {
 typedef struct PL_Window PL_Window;
 
 typedef struct PL_WindowEvent {
-	PL_Window *Target;
 	i32 Width, Height;
 } PL_WindowEvent;
 
@@ -105,6 +104,8 @@ typedef struct PL_AudioEvent {
 
 typedef struct PL_Event {
 	PL_EventKind       Kind;
+	PL_Window *        Target;
+
 	union {
 		PL_WindowEvent Window;
 		PL_ButtonEvent Button;
@@ -205,8 +206,8 @@ void            PL_ReleaseAudioRender(void);
 void            PL_ReleaseAudioCapture(void);
 void            PL_ReleaseAudio(void);
 
-void            PL_CreateWindow(const char *title, uint w, uint h, bool fullscreen);
-void            PL_DestroyWindow(void);
+PL_Window      *PL_CreateWindow(const char *title, uint w, uint h, bool fullscreen);
+void            PL_DestroyWindow(PL_Window *window);
 
 void            PL_Terminate(int code);
 void            PL_PostTerminateMessage(void);
@@ -214,8 +215,8 @@ void            PL_PostTerminateMessage(void);
 PL_UserVTable   PL_GetUserVTable(void);
 void            PL_SetUserVTable(PL_UserVTable vtbl);
 
-bool            PL_IsFullscreen(void);
-void            PL_ToggleFullscreen(void);
+bool            PL_IsFullscreen(PL_Window *window);
+void            PL_ToggleFullscreen(PL_Window *window);
 bool            PL_IsAudioRendering(void);
 void            PL_UpdateAudioRender(void);
 void            PL_PauseAudioRender(void);

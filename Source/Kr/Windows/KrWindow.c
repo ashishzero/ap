@@ -8,14 +8,14 @@
 #pragma comment(lib, "Shell32.lib")
 #pragma warning(pop)
 
-typedef struct PL_Window {
-	HWND            Handle;
+typedef struct PL_WindowExtra {
+	UINT            LastChar;
 	WINDOWPLACEMENT Placement;
-	u16             LastText;
-	LONG volatile   Count;
-} PL_Window;
+} PL_WindowExtra;
 
-static PL_Window    Window;
+static struct {
+	LONG volatile Count;
+} Window;
 
 //
 // Window
@@ -81,33 +81,39 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 	LRESULT res = 0;
 	PL_Event event;
 
+	event.Target = (PL_Window *)wnd;
+
 	switch (msg) {
 		case WM_ACTIVATE: {
 			int low    = LOWORD(wparam);
 			event.Kind = (low == WA_ACTIVE || low == WA_CLICKACTIVE) ?
 				PL_Event_WindowActivated : PL_Event_WindowDeactivated;
-			event.Window.Target = (PL_Window *)wnd;
 			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
 			res = DefWindowProcW(wnd, msg, wparam, lparam);
 		} break;
 
 		case WM_CREATE: {
 			res = DefWindowProcW(wnd, msg, wparam, lparam);
+			PL_WindowExtra *extra = HeapAlloc(GetProcessHeap(), 0, sizeof(PL_WindowExtra));
+			if (extra) {
+				extra->LastChar = 0;
+				GetWindowPlacement(wnd, &extra->Placement);
+			}
+			SetWindowLongPtrW(wnd, GWLP_USERDATA, (LONG_PTR)extra);
 			event.Kind = PL_Event_WindowCreated;
-			event.Window.Target = (PL_Window *)wnd;
 			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
 		} break;
 
 		case WM_DESTROY: {
 			event.Kind = PL_Event_WindowDestroyed;
-			event.Window.Target = (PL_Window *)wnd;
 			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
+			PL_WindowExtra *extra = (PL_WindowExtra *)GetWindowLongPtrW(wnd, GWLP_USERDATA);
+			if (extra) HeapFree(GetProcessHeap(), 0, extra);
 			res = DefWindowProcW(wnd, msg, wparam, lparam);
 		} break;
 
 		case WM_CLOSE: {
 			event.Kind = PL_Event_WindowClosed;
-			event.Window.Target = (PL_Window *)wnd;
 			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
 		} break;
 
@@ -117,7 +123,6 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 			event.Kind          = PL_Event_WindowResized;
 			event.Window.Width  = x;
 			event.Window.Height = y;
-			event.Window.Target = (PL_Window *)wnd;
 			Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
 		} break;
 
@@ -356,23 +361,29 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 		} break;
 
 		case WM_CHAR: {
-			u32 value = (u32)wparam;
+			PL_WindowExtra *ex  = (PL_WindowExtra *)GetWindowLongPtrW(wnd, GWLP_USERDATA);
 
-			if (IS_HIGH_SURROGATE(value)) {
-				Window.LastText = value;
-			} else if (IS_LOW_SURROGATE(value)) {
-				u32 high                = Window.LastText;
-				u32 low                 = value;
-				Window.LastText = 0;
-				u32 codepoint           = 
-				event.Kind              = PL_Event_TextInput;
-				event.Text.Codepoint    = (((high - 0xd800) << 10) + (low - 0xdc00) + 0x10000);
-				Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
+			if (ex) {
+				u32 value = (u32)wparam;
+
+				if (IS_HIGH_SURROGATE(value)) {
+					ex->LastChar = value;
+				} else if (IS_LOW_SURROGATE(value)) {
+					u32 high     = ex->LastChar;
+					u32 low      = value;
+					ex->LastChar = 0;
+					u32 codepoint           = 
+					event.Kind              = PL_Event_TextInput;
+					event.Text.Codepoint    = (((high - 0xd800) << 10) + (low - 0xdc00) + 0x10000);
+					Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
+				} else {
+					ex->LastChar            = 0;
+					event.Kind              = PL_Event_TextInput;
+					event.Text.Codepoint    = value;
+					Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
+				}
 			} else {
-				Window.LastText = 0;
-				event.Kind              = PL_Event_TextInput;
-				event.Text.Codepoint    = value;
-				Media.UserVTable.OnEvent(&event, Media.UserVTable.Data);
+				res = DefWindowProcW(wnd, msg, wparam, lparam);
 			}
 		} break;
 
@@ -393,29 +404,38 @@ static LRESULT CALLBACK PL_HandleWindowsEvent(HWND wnd, UINT msg, WPARAM wparam,
 	return res;
 }
 
-static bool PL_Media_Window_IsFullscreen(void) {
-	DWORD dwStyle = GetWindowLongW(Window.Handle, GWL_STYLE);
-	if (dwStyle & WS_OVERLAPPEDWINDOW) {
+static bool PL_Window_IsFullscreen(PL_Window *window) {
+	if (!window) return false;
+
+	HWND wnd       = (HWND)window;
+	DWORD dw_style = (DWORD)GetWindowLongPtrW(wnd, GWL_STYLE);
+	if (dw_style & WS_OVERLAPPEDWINDOW) {
 		return false;
 	}
 	return true;
 }
 
-static void PL_Media_Window_ToggleFullscreen(void) {
-	HWND hwnd           = Window.Handle;
-	DWORD dwStyle       = GetWindowLongW(hwnd, GWL_STYLE);
-	if (dwStyle & WS_OVERLAPPEDWINDOW) {
+static void PL_Window_ToggleFullscreen(PL_Window *window) {
+	if (!window) return;
+
+	HWND hwnd           = (HWND)window;
+	DWORD dw_style      = (DWORD)GetWindowLongPtrW(hwnd, GWL_STYLE);
+	PL_WindowExtra *ex  = (PL_WindowExtra *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
+
+	if (!ex) return;
+
+	if (dw_style & WS_OVERLAPPEDWINDOW) {
 		MONITORINFO mi  = { sizeof(mi) };
-		if (GetWindowPlacement(hwnd, &Window.Placement) &&
+		if (GetWindowPlacement(hwnd, &ex->Placement) &&
 			GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi)) {
-			SetWindowLongW(hwnd, GWL_STYLE, dwStyle & ~WS_OVERLAPPEDWINDOW);
+			SetWindowLongPtrW(hwnd, GWL_STYLE, dw_style & ~WS_OVERLAPPEDWINDOW);
 			SetWindowPos(hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top,
 				mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top,
 				SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
 		}
 	} else {
-		SetWindowLongW(hwnd, GWL_STYLE, dwStyle | WS_OVERLAPPEDWINDOW);
-		SetWindowPlacement(hwnd, &Window.Placement);
+		SetWindowLongPtrW(hwnd, GWL_STYLE, dw_style | WS_OVERLAPPEDWINDOW);
+		SetWindowPlacement(hwnd, &ex->Placement);
 		SetWindowPos(hwnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
 	}
 }
@@ -424,10 +444,10 @@ static void PL_Media_Window_ToggleFullscreen(void) {
 // Public API
 //
 
-void PL_CreateWindow(const char *mb_title, uint w, uint h, bool fullscreen) {
+PL_Window *PL_CreateWindow(const char *mb_title, uint w, uint h, bool fullscreen) {
 	if (InterlockedIncrement(&Window.Count) == 1) {
-		Media.VTable.IsFullscreen     = PL_Media_Window_IsFullscreen;
-		Media.VTable.ToggleFullscreen = PL_Media_Window_ToggleFullscreen;
+		Media.VTable.IsFullscreen     = PL_Window_IsFullscreen;
+		Media.VTable.ToggleFullscreen = PL_Window_ToggleFullscreen;
 	}
 
 	HMODULE instance = GetModuleHandleW(nullptr);
@@ -452,30 +472,30 @@ void PL_CreateWindow(const char *mb_title, uint w, uint h, bool fullscreen) {
 	int width  = w ? w : CW_USEDEFAULT;
 	int height = h ? h : CW_USEDEFAULT;
 
-	Window.Handle = CreateWindowExW(WS_EX_APPWINDOW, wnd_class.lpszClassName, title, WS_OVERLAPPEDWINDOW,
+	HWND wnd = CreateWindowExW(WS_EX_APPWINDOW, wnd_class.lpszClassName, title, WS_OVERLAPPEDWINDOW,
 		CW_USEDEFAULT, CW_USEDEFAULT, width, height, nullptr, nullptr, instance, nullptr);
-	if (!Window.Handle) {
+	if (!wnd) {
 		LogError("Failed to create window. Reason: %s\n", PL_GetLastError());
-		return;
+		return 0;
 	}
 
 	RAWINPUTDEVICE device;
 	device.usUsagePage = 0x1;
 	device.usUsage     = 0x2;
 	device.dwFlags     = 0;
-	device.hwndTarget  = Window.Handle;
+	device.hwndTarget  = wnd;
 
 	RegisterRawInputDevices(&device, 1, sizeof(device));
 
-	GetWindowPlacement(Window.Handle, &Window.Placement);
+	ShowWindow(wnd, SW_SHOWNORMAL);
+	UpdateWindow(wnd);
 
-	ShowWindow(Window.Handle, SW_SHOWNORMAL);
-	UpdateWindow(Window.Handle);
+	return (PL_Window *)wnd;
 }
 
-void PL_DestroyWindow(void) {
-	DestroyWindow(Window.Handle);
-	memset(&Window, 0, sizeof(Window));
+void PL_DestroyWindow(PL_Window *window) {
+	HWND wnd = (HWND)window;
+	DestroyWindow(wnd);
 
 	if (InterlockedCompareExchange(&Window.Count, 0, 0) > 0) {
 		if (InterlockedDecrement(&Window.Count)) {

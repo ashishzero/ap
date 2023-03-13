@@ -592,7 +592,7 @@ void PlayerHandleEvent(const PL_Event *event, void *user) {
 			}
 		}
 		if (event->Key.Sym == PL_Key_F11) {
-			PL_ToggleFullscreen();
+			PL_ToggleFullscreen(event->Target);
 		}
 	}
 
@@ -1376,7 +1376,7 @@ int Main(int argc, char **argv) {
 	});
 
 	PL_InitAudio(1, 0);
-	PL_CreateWindow("Audio Processing", 0, 0, 0);
+	PL_Window *window = PL_CreateWindow("Audio Processing", 0, 0, 0);
 
 	return 0;
 }

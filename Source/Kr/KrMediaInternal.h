@@ -1,8 +1,8 @@
 #pragma once
 #include "KrMedia.h"
 
-bool PL_Media_Fallback_IsFullscreen();
-void PL_Media_Fallback_ToggleFullscreen();
+bool PL_Media_Fallback_IsFullscreen(PL_Window *);
+void PL_Media_Fallback_ToggleFullscreen(PL_Window *);
 bool PL_Media_Fallback_IsAudioRendering();
 void PL_Media_Fallback_UpdateAudioRender();
 void PL_Media_Fallback_PauseAudioRender();
@@ -21,8 +21,8 @@ typedef struct PL_AudioDeviceBuffer {
 } PL_AudioDeviceBuffer;
 
 typedef struct PL_MediaVTable {
-	bool (*IsFullscreen)       ();
-	void (*ToggleFullscreen)   ();
+	bool (*IsFullscreen)       (PL_Window *);
+	void (*ToggleFullscreen)   (PL_Window *);
 	bool (*IsAudioRendering)   ();
 	void (*UpdateAudioRender)  ();
 	void (*PauseAudioRender)   ();
